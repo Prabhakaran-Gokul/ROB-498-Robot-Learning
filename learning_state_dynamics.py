@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
 from panda_pushing_env import TARGET_POSE_FREE, TARGET_POSE_OBSTACLES, OBSTACLE_HALFDIMS, OBSTACLE_CENTRE, BOX_SIZE
+from torchdiffeq import odeint_adjoint as odeint
 
 TARGET_POSE_FREE_TENSOR = torch.as_tensor(TARGET_POSE_FREE, dtype=torch.float32)
 TARGET_POSE_OBSTACLES_TENSOR = torch.as_tensor(TARGET_POSE_OBSTACLES, dtype=torch.float32)
@@ -343,8 +344,14 @@ class MultiStepLoss(nn.Module):
         multi_step_loss = 0
         for i in range(NUM_STEPS):
             # decay = self.discount ** i
-            next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
-            multi_step_loss += self.discount * self.loss(next_state_pred, target_states[:, i, :])
+            # next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
+            # input_state = torch.cat((next_state_pred, actions[:, i, :]), -1)
+            next_state_pred = odeint(model, (next_state_pred, actions[:, i, :]), torch.tensor([4], dtype=torch.float64))
+            # next_state_pred = next_state_pred.squeeze()
+            # target_states = torch.cat((target_states[:, i, :], actions[:, i, :]), -1)
+        
+            multi_step_loss += self.discount * self.loss(next_state_pred[:, :3], target_states[:, i, :])
+            # multi_step_loss += self.discount * self.loss(next_state_pred, target_states)
 
         multi_step_loss /= len(state)
 
