@@ -296,6 +296,8 @@ class SE2PoseLoss(nn.Module):
         x_target, y_target, theta_target = pose_target[:, 0], pose_target[:, 1], pose_target[:, 2]
         loss_func = nn.MSELoss()
         rg = np.sqrt((self.w**2 + self.l**2) / 12.0)
+        # print("loss func: ", x_pred.shape, x_target.shape)
+        # print("loss func: ", pose_pred.shape, pose_target.shape)
 
         se2_pose_loss = loss_func(x_pred, x_target) + \
                         loss_func(y_pred, y_target) + \
@@ -346,11 +348,14 @@ class MultiStepLoss(nn.Module):
             # decay = self.discount ** i
             # next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
             # input_state = torch.cat((next_state_pred, actions[:, i, :]), -1)
-            next_state_pred = odeint(model, (next_state_pred, actions[:, i, :]), torch.tensor([4], dtype=torch.float64))
-            # next_state_pred = next_state_pred.squeeze()
+            # print(next_state_pred.shape, actions.shape)
+            next_state_pred = odeint(model, torch.cat((next_state_pred, actions[:, i, :]), -1), torch.tensor([4], dtype=torch.float64))
+            # print("next state pred: ", next_state_pred.shape)
+            next_state_pred = next_state_pred.squeeze()
+            next_state_pred = next_state_pred[:, :3]
             # target_states = torch.cat((target_states[:, i, :], actions[:, i, :]), -1)
         
-            multi_step_loss += self.discount * self.loss(next_state_pred[:, :3], target_states[:, i, :])
+            multi_step_loss += self.discount * self.loss(next_state_pred, target_states[:, i, :])
             # multi_step_loss += self.discount * self.loss(next_state_pred, target_states)
 
         multi_step_loss /= len(state)
@@ -461,6 +466,7 @@ def free_pushing_cost_function(state, action):
                     [0, 1, 0],
                     [0, 0, 0.1]
                     ))
+    state = state[:, :3]
     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1)
 
     # ---
@@ -569,7 +575,7 @@ class PushingController(object):
         """
         next_state = None
         # --- Your code here
-        next_state = self.model(state, action)
+        next_state = self.model(1,torch.cat((state[:, :3], action), -1))
 
         # ---
         return next_state
@@ -586,7 +592,7 @@ class PushingController(object):
         action = None
         state_tensor = None
         # --- Your code here
-        state_tensor = torch.from_numpy(state) 
+        state_tensor = torch.from_numpy(state[:3]) 
         print("control")
 
         # ---

@@ -11,6 +11,12 @@ import yaml
 
 from learning_state_dynamics import *
 
+from panda_pushing_env import PandaPushingEnv
+from visualizers import GIFVisualizer, NotebookVisualizer
+from learning_state_dynamics import PushingController, free_pushing_cost_function, collision_detection, obstacle_avoidance_pushing_cost_function
+from panda_pushing_env import TARGET_POSE_FREE, TARGET_POSE_OBSTACLES, BOX_SIZE
+from IPython.display import Image
+
 # parser = argparse.ArgumentParser('ODE demo')
 # parser.add_argument('--method', type=str, choices=['dopri5', 'adams'], default='dopri5')
 # parser.add_argument('--data_size', type=int, default=1000)
@@ -147,23 +153,25 @@ class ODEDynamicsModel(nn.Module):
         self.action_dim = action_dim
 
         self.net = nn.Sequential(
-            nn.Linear(self.state_dim + action_dim, 50),
-            nn.Tanh(),
-            nn.Linear(50, self.state_dim + action_dim)
+            nn.Linear(self.state_dim + action_dim, 100),
+            nn.ReLU(),
+            nn.Linear(100, 100),
+            nn.ReLU(),
+            nn.Linear(100, self.state_dim + action_dim)
         )
 
-        for m in self.net.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0, std=0.1)
-                nn.init.constant_(m.bias, val=0)
+        # for m in self.net.modules():
+        #     if isinstance(m, nn.Linear):
+        #         nn.init.normal_(m.weight, mean=0, std=0.1)
+        #         nn.init.constant_(m.bias, val=0)
 
     def forward(self, t, input_state):
-        print(input_state[0].shape, input_state[1].shape)
+        # print(input_state[0].shape, input_state[1].shape)
 
-        input_state = torch.cat((input_state[0], input_state[1]), -1)
-        print("in: ", input_state.shape)
+        # input_state = torch.cat((input_state[0], input_state[1]), -1)
+        # print("in: ", input_state.shape)
         out = self.net(input_state)
-        print("out: ", out.shape)
+        # print("out: ", out.shape)
         return out
         # return torch.cat((out, torch.zeros(size=(len(input_state), 3))), -1)
 
@@ -255,7 +263,7 @@ def train_model(model, train_dataloader, val_dataloader, optimizer, loss_func, n
     return train_losses, val_losses
 
 
-def train_ode(lr=1e-3, num_epochs=1000):
+def train_ode(lr=1e-3, num_epochs=500):
     pushing_multistep_ODE_dynamics_model = ODEDynamicsModel(3, 3).to(device)
     collected_data = np.load(os.path.join("./", 'collected_data.npy'), allow_pickle=True)
     train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=100)
@@ -264,7 +272,8 @@ def train_ode(lr=1e-3, num_epochs=1000):
     pose_loss = MultiStepLoss(pose_loss, discount=0.9)
     # ii = 0
     
-    optimizer = optim.RMSprop(pushing_multistep_ODE_dynamics_model.parameters(), lr=lr)
+    # optimizer = optim.RMSprop(pushing_multistep_ODE_dynamics_model.parameters(), lr=lr)
+    optimizer = optim.Adam(pushing_multistep_ODE_dynamics_model.parameters(), lr=lr)
 
     train_losses, val_losses = train_model(model=pushing_multistep_ODE_dynamics_model,
                                            train_dataloader=train_loader,
@@ -275,7 +284,7 @@ def train_ode(lr=1e-3, num_epochs=1000):
     
 
     # save model:
-    save_path = os.path.join("./", 'pushing_multi_step_residual_dynamics_model.pt')
+    save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
     torch.save(pushing_multistep_ODE_dynamics_model.state_dict(), save_path)
 
 
@@ -295,8 +304,45 @@ def train_ode(lr=1e-3, num_epochs=1000):
     axes[1].set_yscale('log')
 
     plt.show()
+    return pushing_multistep_ODE_dynamics_model
 
+
+def controller(model):
+        # Control on an obstacle free environment
+
+    # fig = plt.figure(figsize=(8,8))
+    # hfig = display(fig, display_id=True)
+    # visualizer = NotebookVisualizer(fig=fig, hfig=hfig)
+    visualizer = GIFVisualizer()
+
+    env = PandaPushingEnv(visualizer=visualizer, render_non_push_motions=False,  camera_heigh=800, camera_width=800, render_every_n_steps=5)
+    controller = PushingController(env, model, free_pushing_cost_function, num_samples=100, horizon=10)
+    env.reset()
+
+    state_0 = env.reset()
+    state = state_0
+
+    # num_steps_max = 100
+    num_steps_max = 20
+
+    for i in tqdm(range(num_steps_max)):
+        action = controller.control(state)
+        state, reward, done, _ = env.step(action)
+        if done:
+            break
+
+    # Evaluate if goal is reached
+    end_state = env.get_state()
+    target_state = TARGET_POSE_FREE
+    goal_distance = np.linalg.norm(end_state[:2]-target_state[:2]) # evaluate only position, not orientation
+    goal_reached = goal_distance < BOX_SIZE
+
+    print(f'GOAL REACHED: {goal_reached}')
+    
+    Image(visualizer.get_gif())
+    # plt.close(fig)
 
 
 if __name__ == '__main__':
-    train_ode()
+    pushing_multistep_ODE_dynamics_model = train_ode()
+    controller(pushing_multistep_ODE_dynamics_model)  
