@@ -2,12 +2,13 @@ import os
 import argparse
 import time
 import numpy as np
+import yaml
+import matplotlib.pyplot as plt
 
 import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import yaml
 
 from learning_state_dynamics import *
 
@@ -65,66 +66,7 @@ else:
     from torchdiffeq import odeint
 
 device = torch.device('cuda:' + str(gpu_device) if torch.cuda.is_available() and gpu else 'cpu')
-
-
-def makedirs(dirname):
-    if not os.path.exists(dirname):
-        os.makedirs(dirname)
-
-
-if viz:
-    makedirs('png')
-    import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(12, 4), facecolor='white')
-    ax_traj = fig.add_subplot(131, frameon=False)
-    ax_phase = fig.add_subplot(132, frameon=False)
-    ax_vecfield = fig.add_subplot(133, frameon=False)
-    plt.show(block=False)
-
-
-def visualize(true_y, pred_y, odefunc, itr):
-
-    if viz:
-
-        ax_traj.cla()
-        ax_traj.set_title('Trajectories')
-        ax_traj.set_xlabel('t')
-        ax_traj.set_ylabel('x,y')
-        ax_traj.plot(t.cpu().numpy(), true_y.cpu().numpy()[:, 0, 0], t.cpu().numpy(), true_y.cpu().numpy()[:, 0, 1], 'g-')
-        ax_traj.plot(t.cpu().numpy(), pred_y.cpu().numpy()[:, 0, 0], '--', t.cpu().numpy(), pred_y.cpu().numpy()[:, 0, 1], 'b--')
-        ax_traj.set_xlim(t.cpu().min(), t.cpu().max())
-        ax_traj.set_ylim(-2, 2)
-        ax_traj.legend()
-
-        ax_phase.cla()
-        ax_phase.set_title('Phase Portrait')
-        ax_phase.set_xlabel('x')
-        ax_phase.set_ylabel('y')
-        ax_phase.plot(true_y.cpu().numpy()[:, 0, 0], true_y.cpu().numpy()[:, 0, 1], 'g-')
-        ax_phase.plot(pred_y.cpu().numpy()[:, 0, 0], pred_y.cpu().numpy()[:, 0, 1], 'b--')
-        ax_phase.set_xlim(-2, 2)
-        ax_phase.set_ylim(-2, 2)
-
-        ax_vecfield.cla()
-        ax_vecfield.set_title('Learned Vector Field')
-        ax_vecfield.set_xlabel('x')
-        ax_vecfield.set_ylabel('y')
-
-        y, x = np.mgrid[-2:2:21j, -2:2:21j]
-        dydt = odefunc(0, torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 2)).to(device)).cpu().detach().numpy()
-        mag = np.sqrt(dydt[:, 0]**2 + dydt[:, 1]**2).reshape(-1, 1)
-        dydt = (dydt / mag)
-        dydt = dydt.reshape(21, 21, 2)
-
-        ax_vecfield.streamplot(x, y, dydt[:, :, 0], dydt[:, :, 1], color="black")
-        ax_vecfield.set_xlim(-2, 2)
-        ax_vecfield.set_ylim(-2, 2)
-
-        fig.tight_layout()
-        plt.savefig('png/{:03d}'.format(itr))
-        plt.draw()
-        plt.pause(0.001)
-
+device = "cpu"
 
 class ODEDynamicsModel(nn.Module):
 
@@ -252,13 +194,7 @@ def train_model(model, train_dataloader, val_dataloader, optimizer, loss_func, n
         pbar.set_description(f'Train Loss: {train_loss_i:.4f} | Validation Loss: {val_loss_i:.4f}')
         train_losses.append(train_loss_i)
         val_losses.append(val_loss_i)
-        # if epoch_i % test_freq == 0:
-        #     with torch.no_grad():
-        #         pred_y = odeint(model, true_y0, t)
-        #         loss = torch.mean(torch.abs(pred_y - true_y))
-        #         print('Iter {:04d} | Total Loss {:.6f}'.format(epoch_i, loss.item()))
-        #         visualize(true_y, pred_y, model, epoch_i)
-        #         epoch_i += 1
+
     return train_losses, val_losses
 
 
@@ -270,9 +206,7 @@ def train_ode(lr=1e-3, num_epochs=20):
 
     pose_loss = SE2PoseLoss(block_width=0.1, block_length=0.1)
     pose_loss = MultiStepLoss(pose_loss, discount=0.9)
-    # ii = 0
-    
-    # optimizer = optim.RMSprop(pushing_multistep_ODE_dynamics_model.parameters(), lr=lr)
+
     optimizer = optim.Adam(pushing_multistep_ODE_dynamics_model_wrapper.parameters(), lr=lr)
 
     train_losses, val_losses = train_model(model=pushing_multistep_ODE_dynamics_model_wrapper,
@@ -292,26 +226,8 @@ def train_ode(lr=1e-3, num_epochs=20):
 
     # plot train loss and test loss:
     
-    plot(train_losses, val_losses)
+    plot_losses(train_losses, val_losses)
     return pushing_multistep_ODE_dynamics_model_wrapper
-
-
-def plot(train_losses, val_losses):
-    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3))
-    axes[0].plot(train_losses)
-    axes[0].grid()
-    axes[0].set_title('Train Loss')
-    axes[0].set_xlabel('Epochs')
-    axes[0].set_ylabel('Train Loss')
-    axes[0].set_yscale('log')
-    axes[1].plot(val_losses)
-    axes[1].grid()
-    axes[1].set_title('Validation Loss')
-    axes[1].set_xlabel('Epochs')
-    axes[1].set_ylabel('Validation Loss')
-    axes[1].set_yscale('log')
-
-    plt.show()
 
 
 def obstacle_free_controller():
@@ -332,9 +248,7 @@ def obstacle_free_controller():
     num_steps_max = 20
 
     for i in tqdm(range(num_steps_max)):
-        # state = torch.tensor(state).to("cpu")
         action = controller.control(state)
-        # action = torch.tensor(action).to(device)
         state, reward, done, _ = env.step(action)
         if done:
             break
@@ -388,11 +302,77 @@ def obstacle_controller():
     print(f'GOAL REACHED: {goal_reached}')
 
     Image(filename=visualizer.get_gif())
-    # Evaluate state
-    plt.close(fig)
+
+
+def eval_learned_dynamics():
+    # load pretrained model
+    ODE_model = ODEDynamicsModelWrapper(ode_dynamics_model=ODEDynamicsModel(3, 3))
+    ODE_model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
+
+    # Initialize the simulation environment
+    env = PandaPushingEnv(visualizer=None, 
+                          render_non_push_motions=True,  
+                          camera_heigh=800, 
+                          camera_width=800)
+    
+    state = env.reset()
+    pred_state = state.copy()
+    gt_states = [state]
+    pred_states = [pred_state]
+
+
+    # Perform a sequence of random actions:
+    for i in tqdm(range(30)):
+        action_i = env.action_space.sample()
+        
+        pred_state = ODE_model(torch.tensor(pred_state).reshape(1, -1).to(device), 
+                               torch.tensor(action_i).reshape(1, -1).to(device))
+        gt_state, reward, done, info = env.step(action_i)
+
+        pred_states.append(pred_state.detach().numpy().reshape(-1))
+        gt_states.append(gt_state)
+
+        if done:
+            break
+
+    plot_trajectory(pred_states, gt_states)
+
+
+# Plot functions
+
+def plot_losses(train_losses, val_losses):
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3))
+    axes[0].plot(train_losses)
+    axes[0].grid()
+    axes[0].set_title('Train Loss')
+    axes[0].set_xlabel('Epochs')
+    axes[0].set_ylabel('Train Loss')
+    axes[0].set_yscale('log')
+    axes[1].plot(val_losses)
+    axes[1].grid()
+    axes[1].set_title('Validation Loss')
+    axes[1].set_xlabel('Epochs')
+    axes[1].set_ylabel('Validation Loss')
+    axes[1].set_yscale('log')
+
+    plt.show()
+
+
+def plot_trajectory(pred_states, gt_states):
+    pred_states = np.array(pred_states)
+    gt_states = np.array(gt_states)
+    
+    pred_xs = pred_states[:, 0]
+    gt_xs = gt_states[:, 0]
+
+    plt.plot(pred_xs, color="r")
+    plt.plot(gt_xs, color="g")
+
+    plt.show()
 
 
 if __name__ == '__main__':
     # train_ode()
     # obstacle_free_controller() 
-    obstacle_controller() 
+    # obstacle_controller() 
+    eval_learned_dynamics()

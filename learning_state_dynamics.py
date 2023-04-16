@@ -326,7 +326,6 @@ def obstacle_avoidance_pushing_cost_function(state, action):
                 [0, 1, 0],
                 [0, 0, 0.1]
                 ), device=state.device)
-    print(state.device, target_pose.device, Q.device, in_collision.device)
     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1) + 100 * in_collision
 
     # ---
