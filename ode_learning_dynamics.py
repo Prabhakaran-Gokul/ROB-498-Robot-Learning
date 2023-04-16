@@ -66,7 +66,6 @@ else:
     from torchdiffeq import odeint
 
 device = torch.device('cuda:' + str(gpu_device) if torch.cuda.is_available() and gpu else 'cpu')
-device = "cpu"
 
 class ODEDynamicsModel(nn.Module):
 
@@ -81,8 +80,7 @@ class ODEDynamicsModel(nn.Module):
             nn.Linear(100, 100),
             nn.ReLU(),
             nn.Linear(100, self.state_dim + action_dim)
-        )
-
+            ).to(device)
 
     def forward(self, t, input_state):
         out = self.net(input_state.to(device))
@@ -219,14 +217,11 @@ def train_ode(lr=1e-3, num_epochs=20):
 
     # save model:
     model_save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
-    train_losses_path = os.path.join("./", 'train_losses.npy')
-    val_losses_path = os.path.join("./", 'val_losses.npy')
     torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_save_path)
 
-
     # plot train loss and test loss:
-    
     plot_losses(train_losses, val_losses)
+
     return pushing_multistep_ODE_dynamics_model_wrapper
 
 
@@ -329,7 +324,7 @@ def eval_learned_dynamics():
                                torch.tensor(action_i).reshape(1, -1).to(device))
         gt_state, reward, done, info = env.step(action_i)
 
-        pred_states.append(pred_state.detach().numpy().reshape(-1))
+        pred_states.append(pred_state.detach().cpu().numpy().reshape(-1))
         gt_states.append(gt_state)
 
         if done:

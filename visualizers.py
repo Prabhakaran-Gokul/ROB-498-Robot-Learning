@@ -12,7 +12,7 @@ class GIFVisualizer(object):
     def reset(self):
         self.frames = []
 
-    def get_gif(self):
+    def get_gif(self, filename='pushing_visualization.gif'):
         # generate the gif
         filename = 'pushing_visualization.gif'
         print("Creating animated gif, please wait about 10 seconds")

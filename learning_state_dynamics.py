@@ -186,14 +186,11 @@ class SE2PoseLoss(nn.Module):
     def forward(self, pose_pred, pose_target):
         se2_pose_loss = None
         # --- Your code here
-        # x_pred, y_pred, theta_pred = pose_pred[:, 0], pose_pred[:, 1], pose_pred[:, 2]
-        # x_target, y_target, theta_target = pose_target[:, 0], pose_target[:, 1], pose_target[:, 2]
         pose_target = pose_target.to(pose_pred.device)
         x_pred, y_pred, theta_pred = pose_pred[:, 0], pose_pred[:, 1], pose_pred[:, 2]
         x_target, y_target, theta_target = pose_target[:, 0], pose_target[:, 1], pose_target[:, 2]
         loss_func = nn.MSELoss()
         rg = np.sqrt((self.w**2 + self.l**2) / 12.0)
-        # print(x_pred.device, x_target.device, y_pred.device, y_target.device, theta_pred.device, theta_target.device)
 
         se2_pose_loss = loss_func(x_pred, x_target) + \
                         loss_func(y_pred, y_target) + \
@@ -371,8 +368,6 @@ class PushingController(object):
         """
         next_state = None
         # --- Your code here
-        # state = state.to("cuda:0")
-        # action = action.to("cuda:0")
         next_state = self.model(state, action)
 
         # ---
@@ -392,8 +387,6 @@ class PushingController(object):
         # --- Your code here
         # state_tensor = torch.from_numpy(state[:3])
         state_tensor = torch.from_numpy(state)
-        print(state_tensor.device)
-        print("control")
 
         # ---
         action_tensor = self.mppi.command(state_tensor)
