@@ -195,12 +195,6 @@ class SingleStepDynamicsDataset(Dataset):
         sample["state"] = state
         sample["action"] = action
         sample["next_state"] = next_state
-        # print("item: ", item)
-        # print("traj idx: ", traj_idx)
-        # print("step idx: ", step_idx)
-        # print("collected data[0]: ", self.data[item])
-        # print(sample)
-
 
         # ---
         return sample
@@ -248,7 +242,6 @@ class MultiStepDynamicsDataset(Dataset):
         traj_idx = item // self.trajectory_length
         step_idx = item % self.trajectory_length
         state = self.data[traj_idx]["states"][step_idx]
-        # print("state index: ", traj_idx, step_idx)
         
         next_state_array = np.zeros(shape=(self.num_steps, 3), dtype=np.float32) 
         action_array = np.zeros(shape=(self.num_steps, 3), dtype=np.float32)
@@ -260,8 +253,6 @@ class MultiStepDynamicsDataset(Dataset):
             
             action_array[i, :] = action
             next_state_array[i, :] = next_state
-
-            # print("index: ", traj_idx, step_idx+i)
 
         sample["state"] = state
         sample["action"] = action_array
@@ -296,8 +287,6 @@ class SE2PoseLoss(nn.Module):
         x_target, y_target, theta_target = pose_target[:, 0], pose_target[:, 1], pose_target[:, 2]
         loss_func = nn.MSELoss()
         rg = np.sqrt((self.w**2 + self.l**2) / 12.0)
-        # print("loss func: ", x_pred.shape, x_target.shape)
-        # print("loss func: ", pose_pred.shape, pose_target.shape)
 
         se2_pose_loss = loss_func(x_pred, x_target) + \
                         loss_func(y_pred, y_target) + \
@@ -345,19 +334,9 @@ class MultiStepLoss(nn.Module):
         next_state_pred = state
         multi_step_loss = 0
         for i in range(NUM_STEPS):
-            # decay = self.discount ** i
-            # next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
-            # input_state = torch.cat((next_state_pred, actions[:, i, :]), -1)
-            # print(next_state_pred.shape, actions.shape)
-            next_state_pred = odeint(model, torch.cat((next_state_pred, actions[:, i, :]), -1), torch.tensor([4], dtype=torch.float64))
-            # print("next state pred: ", next_state_pred.shape)
-            next_state_pred = next_state_pred.squeeze()
-            next_state_pred = next_state_pred[:, :3]
-            # target_states = torch.cat((target_states[:, i, :], actions[:, i, :]), -1)
-        
+            next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
             multi_step_loss += self.discount * self.loss(next_state_pred, target_states[:, i, :])
-            # multi_step_loss += self.discount * self.loss(next_state_pred, target_states)
-
+            
         multi_step_loss /= len(state)
 
         # ---
@@ -391,7 +370,6 @@ class AbsoluteDynamicsModel(nn.Module):
         next_state = None
         # --- Your code here
         input = torch.cat((state, action), -1)
-        # print(state.shape, input.shape, action.shape)
         
         out1 = self.linear1(input)
         out1_act = self.act_func(out1)
@@ -466,7 +444,6 @@ def free_pushing_cost_function(state, action):
                     [0, 1, 0],
                     [0, 0, 0.1]
                     ))
-    state = state[:, :3]
     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1)
 
     # ---
@@ -575,7 +552,7 @@ class PushingController(object):
         """
         next_state = None
         # --- Your code here
-        next_state = self.model(1,torch.cat((state[:, :3], action), -1))
+        next_state = self.model(state, action)
 
         # ---
         return next_state
@@ -592,7 +569,8 @@ class PushingController(object):
         action = None
         state_tensor = None
         # --- Your code here
-        state_tensor = torch.from_numpy(state[:3]) 
+        # state_tensor = torch.from_numpy(state[:3])
+        state_tensor = torch.from_numpy(state) 
         print("control")
 
         # ---
