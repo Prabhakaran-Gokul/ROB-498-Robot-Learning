@@ -36,7 +36,8 @@ batch_size=20
 niters=2000 
 test_freq=20 
 viz=True 
-gpu=False
+gpu_device=0
+gpu=True
 adjoint=True
 
 def read_params(flag=False):
@@ -52,6 +53,7 @@ def read_params(flag=False):
         niters = config['niters']
         test_freq = config['test_freq']
         viz = config['viz']
+        gpu_device = config['gpu_device']
         gpu = config['gpu']
         adjoint = ['adjoint']
 
@@ -62,7 +64,7 @@ if adjoint:
 else:
     from torchdiffeq import odeint
 
-device = torch.device('cuda:' + str(0) if torch.cuda.is_available() and gpu else 'cpu')
+device = torch.device('cuda:' + str(gpu_device) if torch.cuda.is_available() and gpu else 'cpu')
 
 
 def makedirs(dirname):
@@ -141,7 +143,7 @@ class ODEDynamicsModel(nn.Module):
 
 
     def forward(self, t, input_state):
-        out = self.net(input_state)
+        out = self.net(input_state.to(device))
         
         return out
 
@@ -153,17 +155,21 @@ class ODEDynamicsModelWrapper(nn.Module):
     def __init__(self, ode_dynamics_model: ODEDynamicsModel) -> None:
         super(ODEDynamicsModelWrapper, self).__init__()
         self.ode_dynamics_model = ode_dynamics_model
+        # self.t = torch.tensor([1, 2, 3, 4], dtype=torch.float32)
+        self.t = torch.tensor([0.0, 0.25, 0.5, 0.75], dtype=torch.float32).to(device)
         
 
     def forward(self, state, action):
         # combine state and action to pass it in to ode dynamics model
-        input_to_ode = torch.cat((state, action), -1)
+        state = state.to(device)
+        action = action.to(device)
+        input_to_ode = torch.cat((state, action), -1).to(device)
         out = odeint(self.ode_dynamics_model,
                      input_to_ode, 
-                     torch.tensor([0.25]))
+                     self.t)
         
         # retrieve the next state prediction
-        out = out.squeeze()
+        out = out[1]
         out = out[:, :3]
         
         return out
@@ -183,9 +189,9 @@ def train_step(model, train_loader, optimizer, loss_func) -> float:
     model.train()
     for batch_idx, data in enumerate(train_loader):
         # --- Your code here
-        state = data["state"]
-        action = data["action"]
-        next_state = data["next_state"]
+        state = data["state"].to(device)
+        action = data["action"].to(device)
+        next_state = data["next_state"].to(device)
         optimizer.zero_grad()
         loss = loss_func(model, state, action, next_state)
         loss.backward()
@@ -256,7 +262,7 @@ def train_model(model, train_dataloader, val_dataloader, optimizer, loss_func, n
     return train_losses, val_losses
 
 
-def train_ode(lr=1e-3, num_epochs=500):
+def train_ode(lr=1e-3, num_epochs=20):
     pushing_multistep_ODE_dynamics_model = ODEDynamicsModel(3, 3).to(device)
     pushing_multistep_ODE_dynamics_model_wrapper = ODEDynamicsModelWrapper(pushing_multistep_ODE_dynamics_model).to(device)
     collected_data = np.load(os.path.join("./", 'collected_data.npy'), allow_pickle=True)
@@ -278,11 +284,19 @@ def train_ode(lr=1e-3, num_epochs=500):
     
 
     # save model:
-    save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
-    torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), save_path)
+    model_save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
+    train_losses_path = os.path.join("./", 'train_losses.npy')
+    val_losses_path = os.path.join("./", 'val_losses.npy')
+    torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_save_path)
 
 
     # plot train loss and test loss:
+    
+    plot(train_losses, val_losses)
+    return pushing_multistep_ODE_dynamics_model_wrapper
+
+
+def plot(train_losses, val_losses):
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3))
     axes[0].plot(train_losses)
     axes[0].grid()
@@ -298,10 +312,13 @@ def train_ode(lr=1e-3, num_epochs=500):
     axes[1].set_yscale('log')
 
     plt.show()
-    return pushing_multistep_ODE_dynamics_model_wrapper
 
 
-def controller(model):
+def obstacle_free_controller():
+    model = ODEDynamicsModelWrapper(ode_dynamics_model=ODEDynamicsModel(3, 3))
+    model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
+    model = model.to(device)
+
     # Control on an obstacle free environment
     visualizer = GIFVisualizer()
 
@@ -315,7 +332,9 @@ def controller(model):
     num_steps_max = 20
 
     for i in tqdm(range(num_steps_max)):
+        # state = torch.tensor(state).to("cpu")
         action = controller.control(state)
+        # action = torch.tensor(action).to(device)
         state, reward, done, _ = env.step(action)
         if done:
             break
@@ -323,6 +342,8 @@ def controller(model):
     # Evaluate if goal is reached
     end_state = env.get_state()
     target_state = TARGET_POSE_FREE
+    target_state = target_state
+    end_state = end_state
     goal_distance = np.linalg.norm(end_state[:2]-target_state[:2]) # evaluate only position, not orientation
     goal_reached = goal_distance < BOX_SIZE
 
@@ -331,6 +352,47 @@ def controller(model):
     Image(visualizer.get_gif())
 
 
+def obstacle_controller():
+    model = ODEDynamicsModelWrapper(ode_dynamics_model=ODEDynamicsModel(3, 3))
+    model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
+    model = model.to(device)
+    # Control on an obstacle free environment
+
+    visualizer = GIFVisualizer()
+
+    # set up controller and environment
+    env = PandaPushingEnv(visualizer=visualizer, render_non_push_motions=False,  include_obstacle=True, camera_heigh=800, camera_width=800, render_every_n_steps=5)
+    controller = PushingController(env, model,
+                                obstacle_avoidance_pushing_cost_function, num_samples=1000, horizon=20)
+    env.reset()
+
+
+    state_0 = env.reset()
+    state = state_0
+
+    num_steps_max = 20
+
+    for i in tqdm(range(num_steps_max)):
+        action = controller.control(state)
+        state, reward, done, _ = env.step(action)
+        if done:
+            break
+
+
+    # Evaluate if goal is reached
+    end_state = env.get_state()
+    target_state = TARGET_POSE_OBSTACLES
+    goal_distance = np.linalg.norm(end_state[:2]-target_state[:2]) # evaluate only position, not orientation
+    goal_reached = goal_distance < BOX_SIZE
+
+    print(f'GOAL REACHED: {goal_reached}')
+
+    Image(filename=visualizer.get_gif())
+    # Evaluate state
+    plt.close(fig)
+
+
 if __name__ == '__main__':
-    pushing_multistep_ODE_dynamics_model_wrapper = train_ode()
-    controller(pushing_multistep_ODE_dynamics_model_wrapper)  
+    # train_ode()
+    # obstacle_free_controller() 
+    obstacle_controller() 

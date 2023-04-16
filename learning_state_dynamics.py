@@ -58,49 +58,6 @@ def collect_data_random(env, num_trajectories=1000, trajectory_length=10):
     return collected_data
 
 
-def process_data_single_step(collected_data, batch_size=500):
-    """
-    Process the collected data and returns a DataLoader for train and one for validation.
-    The data provided is a list of trajectories (like collect_data_random output).
-    Each DataLoader must load dictionary as {'state': x_t,
-     'action': u_t,
-     'next_state': x_{t+1},
-    }
-    where:
-     x_t: torch.float32 tensor of shape (batch_size, state_size)
-     u_t: torch.float32 tensor of shape (batch_size, action_size)
-     x_{t+1}: torch.float32 tensor of shape (batch_size, state_size)
-
-    The data should be split in a 80-20 training-validation split.
-    :param collected_data:
-    :param batch_size: <int> size of the loaded batch.
-    :return:
-
-    Hints:
-     - Pytorch provides data tools for you such as Dataset and DataLoader and random_split
-     - You should implement SingleStepDynamicsDataset below.
-        This class extends pytorch Dataset class to have a custom data format.
-    """
-    train_loader = None
-    val_loader = None
-    # --- Your code here
-    dataset = SingleStepDynamicsDataset(collected_data=collected_data)
-    # print(dataset[10])
-    train_data, val_data = random_split(dataset, 
-                                        [0.8, 0.2])
-
-    train_loader = DataLoader(dataset=train_data,
-                              batch_size=batch_size,
-                              shuffle=True
-                              )
-    val_loader = DataLoader(dataset=val_data,
-                            batch_size=batch_size,
-                            shuffle=True)    
-
-    # ---
-    return train_loader, val_loader
-
-
 def process_data_multiple_step(collected_data, batch_size=500, num_steps=4):
     """
     Process the collected data and returns a DataLoader for train and one for validation.
@@ -142,62 +99,8 @@ def process_data_multiple_step(collected_data, batch_size=500, num_steps=4):
     val_loader = DataLoader(dataset=val_data,
                             batch_size=batch_size,
                             shuffle=True)   
-
-
-    # ---
+    
     return train_loader, val_loader
-
-
-class SingleStepDynamicsDataset(Dataset):
-    """
-    Each data sample is a dictionary containing (x_t, u_t, x_{t+1}) in the form:
-    {'state': x_t,
-     'action': u_t,
-     'next_state': x_{t+1},
-    }
-    where:
-     x_t: torch.float32 tensor of shape (state_size,)
-     u_t: torch.float32 tensor of shape (action_size,)
-     x_{t+1}: torch.float32 tensor of shape (state_size,)
-    """
-
-    def __init__(self, collected_data):
-        self.data = collected_data
-        self.trajectory_length = self.data[0]['actions'].shape[0]
-
-    def __len__(self):
-        return len(self.data) * self.trajectory_length
-
-    def __iter__(self):
-        for i in range(self.__len__()):
-            yield self.__getitem__(i)
-
-    def __getitem__(self, item):
-        """
-        Return the data sample corresponding to the index <item>.
-        :param item: <int> index of the data sample to produce.
-            It can take any value in range 0 to self.__len__().
-        :return: data sample corresponding to encoded as a dictionary with keys (state, action, next_state).
-        The class description has more details about the format of this data sample.
-        """
-        sample = {
-            'state': None,
-            'action': None,
-            'next_state': None,
-        }
-        # --- Your code here
-        traj_idx = item // self.trajectory_length
-        step_idx = item % self.trajectory_length
-        state = self.data[traj_idx]["states"][step_idx]
-        action = self.data[traj_idx]["actions"][step_idx]
-        next_state = self.data[traj_idx]["states"][step_idx+1]
-
-        sample["state"] = state
-        sample["action"] = action
-        sample["next_state"] = next_state
-
-        # ---
-        return sample
 
 
 class MultiStepDynamicsDataset(Dataset):
@@ -283,10 +186,14 @@ class SE2PoseLoss(nn.Module):
     def forward(self, pose_pred, pose_target):
         se2_pose_loss = None
         # --- Your code here
+        # x_pred, y_pred, theta_pred = pose_pred[:, 0], pose_pred[:, 1], pose_pred[:, 2]
+        # x_target, y_target, theta_target = pose_target[:, 0], pose_target[:, 1], pose_target[:, 2]
+        pose_target = pose_target.to(pose_pred.device)
         x_pred, y_pred, theta_pred = pose_pred[:, 0], pose_pred[:, 1], pose_pred[:, 2]
         x_target, y_target, theta_target = pose_target[:, 0], pose_target[:, 1], pose_target[:, 2]
         loss_func = nn.MSELoss()
         rg = np.sqrt((self.w**2 + self.l**2) / 12.0)
+        # print(x_pred.device, x_target.device, y_pred.device, y_target.device, theta_pred.device, theta_target.device)
 
         se2_pose_loss = loss_func(x_pred, x_target) + \
                         loss_func(y_pred, y_target) + \
@@ -295,24 +202,6 @@ class SE2PoseLoss(nn.Module):
         # ---
         return se2_pose_loss
 
-
-class SingleStepLoss(nn.Module):
-
-    def __init__(self, loss_fn):
-        super().__init__()
-        self.loss = loss_fn
-
-    def forward(self, model, state, action, target_state):
-        """
-        Compute the single step loss resultant of querying model with (state, action) and comparing the predictions with target_state.
-        """
-        single_step_loss = None
-        # --- Your code here
-        next_state_pred = model.forward(state, action)
-        single_step_loss = self.loss(next_state_pred, target_state) 
-
-        # ---
-        return single_step_loss
 
 
 class MultiStepLoss(nn.Module):
@@ -330,103 +219,30 @@ class MultiStepLoss(nn.Module):
         # --- Your code here
         assert len(actions.shape) == 3
         B, NUM_STEPS, size = actions.shape
+        target_states = target_states.to(state.device)
 
         next_state_pred = state
         multi_step_loss = 0
+        # next_state_pred_arr = torch.zeros(size=(NUM_STEPS, *(state.shape)))
+        losses_i = torch.zeros(actions.shape[1])
         for i in range(NUM_STEPS):
             next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
-            multi_step_loss += self.discount * self.loss(next_state_pred, target_states[:, i, :])
-            
-        multi_step_loss /= len(state)
+            # next_state_pred_arr[i] = next_state_pred
+            # print(next_state_pred.shape, target_states.shape)
+            loss_i = self.loss(next_state_pred, target_states[:, i, :])
+            losses_i[i] = loss_i
+
+        lambdas = torch.tensor([self.discount**i for i in range(actions.shape[1])])
+        multi_step_loss = lambdas * losses_i
+        multi_step_loss = multi_step_loss.sum()
+
+        # multi_step_loss += self.discount * self.loss(next_state_pred_arr, target_states)
+
+        # multi_step_loss /= len(state)
 
         # ---
         return multi_step_loss
 
-
-class AbsoluteDynamicsModel(nn.Module):
-    """
-    Model the absolute dynamics x_{t+1} = f(x_{t},a_{t})
-    """
-
-    def __init__(self, state_dim, action_dim):
-        super().__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        # --- Your code here
-        self.linear1 = nn.Linear(self.state_dim + self.action_dim, 100)
-        self.linear2 = nn.Linear(100, 100)
-        self.linear3 = nn.Linear(100, self.state_dim)
-        self.act_func = nn.ReLU()
-
-        # ---
-
-    def forward(self, state, action):
-        """
-        Compute next_state resultant of applying the provided action to provided state
-        :param state: torch tensor of shape (..., state_dim)
-        :param action: torch tensor of shape (..., action_dim)
-        :return: next_state: torch tensor of shape (..., state_dim)
-        """
-        next_state = None
-        # --- Your code here
-        input = torch.cat((state, action), -1)
-        
-        out1 = self.linear1(input)
-        out1_act = self.act_func(out1)
-        
-        out2 = self.linear2(out1_act)
-        out2_act = self.act_func(out2)
-        
-        out3 = self.linear3(out2_act)
-
-        next_state = out3
-
-        # ---
-        return next_state
-
-
-class ResidualDynamicsModel(nn.Module):
-    """
-    Model the residual dynamics s_{t+1} = s_{t} + f(s_{t}, u_{t})
-
-    Observation: The network only needs to predict the state difference as a function of the state and action.
-    """
-
-    def __init__(self, state_dim, action_dim):
-        super().__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        # --- Your code here
-        self.linear1 = nn.Linear(self.state_dim + self.action_dim, 100)
-        self.linear2 = nn.Linear(100, 100)
-        self.linear3 = nn.Linear(100, self.state_dim)
-        self.act_func = nn.ReLU()
-
-        # ---
-
-    def forward(self, state, action):
-        """
-        Compute next_state resultant of applying the provided action to provided state
-        :param state: torch tensor of shape (..., state_dim)
-        :param action: torch tensor of shape (..., action_dim)
-        :return: next_state: torch tensor of shape (..., state_dim)
-        """
-        next_state = None
-        # --- Your code here
-        input = torch.cat((state, action), -1)
-        
-        out1 = self.linear1(input)
-        out1_act = self.act_func(out1)
-        
-        out2 = self.linear2(out1_act)
-        out2_act = self.act_func(out2)
-        
-        out3 = self.linear3(out2_act)
-
-        next_state = torch.add(out3, state)
-
-        # ---
-        return next_state
 
 
 def free_pushing_cost_function(state, action):
@@ -439,15 +255,17 @@ def free_pushing_cost_function(state, action):
     target_pose = TARGET_POSE_FREE_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
     # --- Your code here
+    target_pose = target_pose.to(state.device)
+
     Q = torch.tensor((
                     [1, 0, 0],
                     [0, 1, 0],
                     [0, 0, 0.1]
-                    ))
+                    ), device=state.device)
     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1)
 
     # ---
-    return cost
+    return cost.to("cpu")
 
 
 def collision_detection(state):
@@ -472,10 +290,10 @@ def collision_detection(state):
 
     w = box_size/2
     obs_w = obstacle_dims/2
-    corner = torch.tensor([[w,w],[-w,-w]])
+    corner = torch.tensor([[w,w],[-w,-w]]).to(state.device)
     corner_obs = torch.stack((obs_w,-1*obs_w), dim=0)
     obs_dim = obstacle_centre + corner_obs
-    in_collision = torch.zeros(state.shape[0])
+    in_collision = torch.zeros(state.shape[0]).to(state.device)
 
     for i in range(state.shape[0]):
       obj_dim = corner + state[i,:2]
@@ -500,17 +318,19 @@ def obstacle_avoidance_pushing_cost_function(state, action):
     """
     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
+    target_pose = target_pose.to(state.device)
     # --- Your code here
     in_collision = collision_detection(state)
     Q = torch.tensor((
                 [1, 0, 0],
                 [0, 1, 0],
                 [0, 0, 0.1]
-                ))
+                ), device=state.device)
+    print(state.device, target_pose.device, Q.device, in_collision.device)
     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1) + 100 * in_collision
 
     # ---
-    return cost
+    return cost.to("cpu")
 
 
 class PushingController(object):
@@ -552,6 +372,8 @@ class PushingController(object):
         """
         next_state = None
         # --- Your code here
+        # state = state.to("cuda:0")
+        # action = action.to("cuda:0")
         next_state = self.model(state, action)
 
         # ---
@@ -570,7 +392,8 @@ class PushingController(object):
         state_tensor = None
         # --- Your code here
         # state_tensor = torch.from_numpy(state[:3])
-        state_tensor = torch.from_numpy(state) 
+        state_tensor = torch.from_numpy(state)
+        print(state_tensor.device)
         print("control")
 
         # ---
