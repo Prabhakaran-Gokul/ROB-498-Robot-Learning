@@ -1,0 +1,8 @@
+method: 'dopri5'
+train: False
+batch_size: 500
+num_epochs: 20
+epochs: 20
+viz: True
+device: 'cpu'
+adjoint: True
