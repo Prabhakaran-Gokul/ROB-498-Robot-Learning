@@ -4,6 +4,7 @@ import time
 import numpy as np
 import yaml
 import matplotlib.pyplot as plt
+import datetime
 
 import tqdm
 import torch
@@ -11,6 +12,9 @@ import torch.nn as nn
 import torch.optim as optim
 
 from learning_state_dynamics import *
+from torchdiffeq import odeint_adjoint as odeint_adj
+from torchdiffeq import odeint as odeint_norm
+
 
 from panda_pushing_env import PandaPushingEnv
 from visualizers import GIFVisualizer
@@ -29,6 +33,7 @@ from IPython.display import Image
 # gpu=False
 # adjoint=True
 
+
 def read_params():
     # global method, train, batch_size, num_epochs, batch_size, viz, device, adjoint
     with open('config.yml', 'r') as file:
@@ -41,13 +46,15 @@ def read_params():
     viz = config['viz']
     device = config['device']
     adjoint = config['adjoint']
+    epochs = config['epochs']
+    lr = float(config['lr'])
 
-    return method, train, batch_size, num_epochs, batch_size, viz, device, adjoint
+    return method, train, batch_size, num_epochs, batch_size, viz, device, adjoint, epochs, lr
 
 
 class ODEDynamicsModel(nn.Module):
 
-    def __init__(self, state_dim, action_dim, device='cpu'):
+    def __init__(self, state_dim, action_dim,f, device='cpu'):
         super(ODEDynamicsModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -60,6 +67,8 @@ class ODEDynamicsModel(nn.Module):
             nn.ReLU(),
             nn.Linear(100, self.state_dim + action_dim)
             ).to(device)
+        log_var = [module for module in self.net.modules() if not isinstance(module, nn.Sequential)]
+        f.write("architecture:  "+str(log_var)+"\n")
 
     def forward(self, t, input_state):
         out = self.net(input_state.to(self.device))
@@ -71,22 +80,26 @@ class ODEDynamicsModelWrapper(nn.Module):
     """
     Wraps ODEDynamicsModel class to take in and return the correct dimensions
     """
-    def __init__(self, ode_dynamics_model: ODEDynamicsModel, device='cpu') -> None:
+    def __init__(self, odeint, ode_dynamics_model: ODEDynamicsModel, f, device='cpu', method='dopri5') -> None:
         super(ODEDynamicsModelWrapper, self).__init__()
         self.ode_dynamics_model = ode_dynamics_model
         # self.t = torch.tensor([1, 2, 3, 4], dtype=torch.float32)
         self.t = torch.tensor([0.0, 0.25, 0.5, 0.75], dtype=torch.float32).to(device)
+        f.write("timesteps:  "+str(self.t)+"\n")
         self.device = device
-        
+        self.method = method
+        self.odeint = odeint
 
     def forward(self, state, action):
         # combine state and action to pass it in to ode dynamics model
         state = state.to(self.device)
         action = action.to(self.device)
         input_to_ode = torch.cat((state, action), -1).to(self.device)
-        out = odeint(self.ode_dynamics_model,
+        # print(odeint,"ode")
+        out = self.odeint(self.ode_dynamics_model,
                      input_to_ode, 
-                     self.t)
+                     self.t,
+                     method = self.method)
         
         # retrieve the next state prediction
         out = out[1]
@@ -176,16 +189,19 @@ def train_model(model, train_dataloader, val_dataloader, optimizer, loss_func, n
     return train_losses, val_losses
 
 
-def train_ode(lr=1e-3, num_epochs=10, device='cpu'):
-    pushing_multistep_ODE_dynamics_model = ODEDynamicsModel(3, 3).to(device)
-    pushing_multistep_ODE_dynamics_model_wrapper = ODEDynamicsModelWrapper(pushing_multistep_ODE_dynamics_model).to(device)
+def train_ode(dir, f, method, odeint, lr=1e-3, num_epochs=10, device='cpu', batch_size=100, viz=True):
+    pushing_multistep_ODE_dynamics_model = ODEDynamicsModel(3, 3, f).to(device)
+    pushing_multistep_ODE_dynamics_model_wrapper = ODEDynamicsModelWrapper(odeint, pushing_multistep_ODE_dynamics_model, f, method=method).to(device)
+    f.write("training_integration_method:  "+method+"\n")
     collected_data = np.load(os.path.join("./", 'collected_data.npy'), allow_pickle=True)
-    train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=100)
+    train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=batch_size)
 
     pose_loss = SE2PoseLoss(block_width=0.1, block_length=0.1).to(device)
     pose_loss = MultiStepLoss(pose_loss, discount=0.9).to(device)
 
     optimizer = optim.Adam(pushing_multistep_ODE_dynamics_model_wrapper.parameters(), lr=lr)
+    f.write("learning rate:  "+str(lr)+"\n")
+    f.write("optimizer:  "+str(type(optimizer))+"\n")
 
     train_losses, val_losses = train_model(model=pushing_multistep_ODE_dynamics_model_wrapper,
                                            train_dataloader=train_loader,
@@ -198,16 +214,19 @@ def train_ode(lr=1e-3, num_epochs=10, device='cpu'):
 
     # save model:
     model_save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
+    model_log_path = os.path.join(dir, 'pushing_multi_step_ode_dynamics_model.pt')
     torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_save_path)
+    torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_log_path)
 
     # plot train loss and test loss:
-    plot_losses(train_losses, val_losses)
+    plot_losses(train_losses, val_losses, dir, f, viz)
 
     return pushing_multistep_ODE_dynamics_model_wrapper
 
 
-def obstacle_free_controller(device='cpu'):
-    model = ODEDynamicsModelWrapper(ode_dynamics_model=ODEDynamicsModel(3, 3))
+def obstacle_free_controller(dir, f, method, odeint, device='cpu', e=20):
+    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ODEDynamicsModel(3, 3, f), f=f, method=method)
+    f.write("obstacle_free_integration_method:  "+method+"\n")
     model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
     model = model.to(device)
 
@@ -221,8 +240,8 @@ def obstacle_free_controller(device='cpu'):
     state_0 = env.reset()
     state = state_0
 
-    num_steps_max = 20
-
+    num_steps_max = e
+    f.write("max_steps:  "+str(num_steps_max)+"\n")
     for i in tqdm(range(num_steps_max)):
         action = controller.control(state)
         state, reward, done, _ = env.step(action)
@@ -238,12 +257,15 @@ def obstacle_free_controller(device='cpu'):
     goal_reached = goal_distance < BOX_SIZE
 
     print(f'GOAL REACHED: {goal_reached}')
+    f.write("Goal Reached:  "+str(goal_reached)+"\n")
+
     
-    Image(visualizer.get_gif())
+    Image(visualizer.get_gif(dir=dir, obs=0))
 
 
-def obstacle_controller(device='cpu'):
-    model = ODEDynamicsModelWrapper(ode_dynamics_model=ODEDynamicsModel(3, 3))
+def obstacle_controller(dir, f, method, odeint, device='cpu', e=20):
+    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ODEDynamicsModel(3, 3, f), f=f, method=method)
+    f.write("obstacle_integration_method:  "+method+"\n")
     model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
     model = model.to(device)
     # Control on an obstacle free environment
@@ -260,7 +282,8 @@ def obstacle_controller(device='cpu'):
     state_0 = env.reset()
     state = state_0
 
-    num_steps_max = 20
+    num_steps_max = e
+    f.write("max_steps_obstacle:  "+str(num_steps_max)+"\n")
     is_valid_action = False
 
     for i in tqdm(range(num_steps_max)):
@@ -280,15 +303,18 @@ def obstacle_controller(device='cpu'):
     target_state = TARGET_POSE_OBSTACLES
     goal_distance = np.linalg.norm(end_state[:2]-target_state[:2]) # evaluate only position, not orientation
     goal_reached = goal_distance < BOX_SIZE
-
+    
+    f.write("Goal Reached_obstacle:  "+str(goal_reached)+"\n")
     print(f'GOAL REACHED: {goal_reached}')
 
-    Image(filename=visualizer.get_gif())
+    Image(filename=visualizer.get_gif(dir, obs=1))
 
 
-def eval_learned_dynamics(device='cpu'):
+def eval_learned_dynamics(dir, f, method, odeint, device='cpu', viz='True'):
     # load pretrained model
-    ODE_model = ODEDynamicsModelWrapper(ode_dynamics_model=ODEDynamicsModel(3, 3))
+    ODE_model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ODEDynamicsModel(3, 3,f),f=f, method=method)
+    f.write("eval_integration_method:  "+method+"\n")
+
     ODE_model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
 
     # Initialize the simulation environment
@@ -317,12 +343,12 @@ def eval_learned_dynamics(device='cpu'):
         if done:
             break
 
-    plot_trajectory(pred_states, gt_states)
+    plot_trajectory(pred_states, gt_states, dir, viz)
 
 
 # Plot functions
 
-def plot_losses(train_losses, val_losses):
+def plot_losses(train_losses, val_losses, dir, f, viz):
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3))
     axes[0].plot(train_losses)
     axes[0].grid()
@@ -337,11 +363,12 @@ def plot_losses(train_losses, val_losses):
     axes[1].set_ylabel('Validation Loss')
     axes[1].set_yscale('log')
 
-    plt.savefig("Train_val_loss.png")
-    plt.show()
+    plt.savefig(dir+"/Train_val_loss.png")
+    if viz:
+        plt.show()
 
 
-def plot_trajectory(pred_states, gt_states):
+def plot_trajectory(pred_states, gt_states, dir, viz):
     pred_states = np.array(pred_states)
     gt_states = np.array(gt_states)
 
@@ -360,16 +387,41 @@ def plot_trajectory(pred_states, gt_states):
         axes[idx].set_ylabel(f'{var} state')
 
     plt.savefig("Trajectory.png")
+    plt.savefig(dir+"/Trajectory.png")
+    if viz:
+        plt.show()
 
-    plt.show()
 
 def run():
-    method, train, batch_size, num_epochs, batch_size, viz, device, adjoint = read_params()
+    method, train, batch_size, num_epochs, batch_size, viz, device, adjoint, epochs, lr = read_params()
+    
+    if adjoint:
+        odeint = odeint_adj
+    else:
+        odeint = odeint_norm
+    dir = "./plots/"+str(datetime.datetime.now())
+    if not os.path.exists('./plots'):
+        os.mkdir('./plots')
+    os.mkdir(dir)
+    with open(dir+"/config_log.txt", "a") as f:
+        f.write("\n##########ENTER##########\n")
+        f.write("num_epochs:  "+str(num_epochs)+"\n")
+        f.write("control_epochs:  "+str(epochs)+"\n")
+        f.write("device:  "+str(device)+"\n")
+        f.write("ode_method:  "+str(odeint)+"\n")
+        if train:
+            print("Training")
+            f.write("\n##########TRAINING##########\n")
+            train_ode(dir=dir, f=f, method=method, odeint=odeint, lr=lr, num_epochs=num_epochs, device=device, batch_size=batch_size, viz=viz)
+        print("CONTROL - OBSTACLE FREE")
+        f.write("\n##########CONTROL - OBSTACLE FREE##########\n")
+        obstacle_free_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, e=epochs) 
+        print("CONTROL - W/ OBSTACLE")
+        f.write("\n##########CONTROL - W/ OBSTACLE##########\n")
+        obstacle_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, e=epochs) 
+        print("EVALUATION")
+        f.write("\n##########EVALUATION##########\n")
+        eval_learned_dynamics(dir=dir, f=f, method=method, odeint=odeint, device = device, viz=viz)
 
-    if train:
-        print("Training")
-        train_ode(num_epochs=num_epochs, device=device)
-    # train_ode(num_epochs=20)
-    # obstacle_free_controller(device) 
-    obstacle_controller(device) 
-    eval_learned_dynamics(device)
+if __name__ =='__main__':
+    run()
