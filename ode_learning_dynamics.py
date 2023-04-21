@@ -23,8 +23,8 @@ from panda_pushing_env import TARGET_POSE_FREE, TARGET_POSE_OBSTACLES, BOX_SIZE
 from IPython.display import Image
 
 
-def read_params():
-    with open('config.yml', 'r') as file:
+def read_params(config_file):
+    with open(config_file, 'r') as file:
         config = yaml.safe_load(file)
 
     method = config['method']
@@ -39,6 +39,18 @@ def read_params():
     num_pts_for_intp = config['num_pts_for_intp']
 
     return method, train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr, num_pts_for_intp
+
+
+def read_grid_search_params(config_file):
+    with open(config_file, 'r') as file:
+        config = yaml.safe_load(file)
+
+    methods = config[methods]
+    num_of_steps = config[num_of_steps]
+    hidden_layers = config[hidden_layers]
+    hidden_layer_neurons = config[hidden_layer_neurons]
+
+    return methods, num_of_steps, num_of_steps, hidden_layers, hidden_layer_neurons 
 
 
 class ODEDynamicsModel(nn.Module):
@@ -81,6 +93,8 @@ class ODEDynamicsModelWrapper(nn.Module):
         self.t = torch.linspace(start=0, end=1, 
                                 steps=num_pts_for_intp+1, 
                                 dtype=torch.float32, device=device)
+        
+        self.t = self.t[:-1]
 
         f.write("timesteps:  " + str(self.t) + "\n")
         
@@ -241,12 +255,19 @@ def obstacle_free_controller(dir, f, method, odeint, device='cpu', num_steps_max
 
     state_0 = env.reset()
     state = state_0
+    is_valid_action = False
+
 
     num_steps_max = num_steps_max
-    f.write("max_steps:  "+str(num_steps_max) + "\n")
+    f.write("max_steps:  " + str(num_steps_max) + "\n")
     for i in tqdm(range(num_steps_max)):
-        action = controller.control(state)
+        while not is_valid_action:
+            action = controller.control(state)
+            is_valid_action = env.check_action_valid(action)
+        is_valid_action = False
+        
         state, reward, done, _ = env.step(action)
+
         if done:
             break
 
@@ -331,7 +352,8 @@ def eval_learned_dynamics(dir, f, method, odeint, device='cpu', viz='True'):
     pred_state = state.copy()
     gt_states = [state]
     pred_states = [pred_state]
-    errors = [pose_error_func(pred_state, state)]
+    print(torch.from_numpy(pred_state).reshape(1, -1), torch.from_numpy(pred_state).reshape(1, -1).shape)
+    se2_errors = [pose_error_func(torch.from_numpy(pred_state).reshape(1, -1), torch.from_numpy(state).reshape(1, -1))]
 
 
     # Perform a sequence of random actions:
@@ -344,12 +366,17 @@ def eval_learned_dynamics(dir, f, method, odeint, device='cpu', viz='True'):
 
         pred_states.append(pred_state.detach().cpu().numpy().reshape(-1))
         gt_states.append(gt_state)
-        errors.append(pose_error_func(pred_state, state))
+        se2_errors.append(
+            pose_error_func(
+                torch.tensor(pred_state).reshape(1, -1),
+                torch.tensor(state).reshape(1, -1)
+                )
+        )
 
         if done:
             break
 
-    plot_trajectory(pred_states, gt_states, dir, viz)
+    plot_trajectory(pred_states, gt_states, se2_errors, dir, viz)
 
 
 # Plot functions
@@ -374,11 +401,13 @@ def plot_losses(train_losses, val_losses, dir, f, viz):
         plt.show()
 
 
-def plot_trajectory(pred_states, gt_states, dir, viz):
+def plot_trajectory(pred_states, gt_states, se2_errors, dir, viz):
     pred_states = np.array(pred_states)
     gt_states = np.array(gt_states)
 
-    fig, axes = plt.subplots(3, sharex=True)
+    fig, axes = plt.subplots(4, sharex=True)
+    plt.subplots_adjust(wspace=0.4, hspace=0.4)
+    # plt.figure(figsize=(20, 6))
     state_variables = ["x", "y", "theta"]
 
     for idx, var in enumerate(state_variables):
@@ -391,6 +420,12 @@ def plot_trajectory(pred_states, gt_states, dir, viz):
         axes[idx].set_xlabel('Time steps')
         axes[idx].set_ylabel(f'{var} state')
 
+    axes[len(state_variables)].plot(se2_errors)
+    axes[len(state_variables)].grid()
+    axes[len(state_variables)].set_title(f'SE2 Error between Ground Truth and Predicted Trajectories')
+    axes[len(state_variables)].set_xlabel('Time steps')
+    axes[len(state_variables)].set_ylabel('SE2 Error (m)')
+
     plt.savefig("Trajectory.png")
     plt.savefig(dir + "/Trajectory.png")
     if viz:
@@ -398,7 +433,7 @@ def plot_trajectory(pred_states, gt_states, dir, viz):
 
 
 def run():
-    method, train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr, num_pts_for_intp = read_params()
+    method, train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr, num_pts_for_intp = read_params(config_file="config.yml")
     
     if adjoint:
         odeint = odeint_adj
@@ -423,10 +458,22 @@ def run():
         print("CONTROL - OBSTACLE FREE")
 
         f.write("\n##########CONTROL - OBSTACLE FREE##########\n")
-        obstacle_free_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, num_steps_max=num_steps_max) 
+        obstacle_free_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, num_steps_max=num_steps_max)         
         print("CONTROL - W/ OBSTACLE")
+        
         f.write("\n##########CONTROL - W/ OBSTACLE##########\n")
         obstacle_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, num_steps_max=num_steps_max) 
+        
         print("EVALUATION")
         f.write("\n##########EVALUATION##########\n")
         eval_learned_dynamics(dir=dir, f=f, method=method, odeint=odeint, device = device, viz=viz)
+
+
+def grid_search():
+    methods, num_of_steps, num_of_steps, hidden_layers, hidden_layer_neurons = read_grid_search_params(config_file="grid_search.yml")
+    for method in methods:
+        for num_of_step in num_of_steps:
+            for hidden_layer in hidden_layers:
+                for hidden_layer_neuron in hidden_layer_neurons:
+                    run()
+

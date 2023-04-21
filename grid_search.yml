@@ -1,0 +1,5 @@
+methods: ['rk4', 'dopri5', 'euler']
+num_of_steps: [4, 6, 8]
+hidden_layers: [2, 3]
+hidden_layer_neurons: [100, 200]
+num_pts_for_intp: 4 # number of points for interpolation
