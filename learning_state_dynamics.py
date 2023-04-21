@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
 from panda_pushing_env import TARGET_POSE_FREE, TARGET_POSE_OBSTACLES, OBSTACLE_HALFDIMS, OBSTACLE_CENTRE, BOX_SIZE
-from torchdiffeq import odeint_adjoint as odeint
+# from torchdiffeq import odeint_adjoint as odeint
 
 TARGET_POSE_FREE_TENSOR = torch.as_tensor(TARGET_POSE_FREE, dtype=torch.float32)
 TARGET_POSE_OBSTACLES_TENSOR = torch.as_tensor(TARGET_POSE_OBSTACLES, dtype=torch.float32)
@@ -265,6 +265,69 @@ def free_pushing_cost_function(state, action):
     return cost.to("cpu")
 
 
+# def collision_detection(state):
+#     """
+#     Checks if the state is in collision with the obstacle.
+#     The obstacle geometry is known and provided in obstacle_centre and obstacle_halfdims.
+#     :param state: torch tensor of shape (B, state_size)
+#     :return: in_collision: torch tensor of shape (B,) containing 1 if the state is in collision and 0 if not.
+#     """
+#     obstacle_centre = OBSTACLE_CENTRE_TENSOR  # torch tensor of shape (2,) consisting of obstacle centre (x, y)
+#     obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
+#     box_size = BOX_SIZE  # scalar for parameter w
+#     in_collision = None
+#     # --- Your code here
+#     # obstacle_corners = get_corner_coordinates(obstacle_centre.reshape(1, -1), obstacle_dims)
+#     # unrotated_object_corners = get_corner_coordinates(state[:, :2], torch.tensor([box_size, box_size]))
+#     # object_corners = rotate_corner_coordinates(unrotated_object_corners, state[:, -1])
+    
+#     # in_collision = torch.full(size=(len(object_corners),), fill_value=-1.0, dtype=torch.float)
+#     # for i in range(len(object_corners)):
+#     #     in_collision[i] = is_polygon_intersecting(obstacle_corners.reshape(4, 2), object_corners[i])
+
+#     w = box_size/2
+#     obs_w = obstacle_dims/2
+#     corner = torch.tensor([[w,w],[-w,-w]]).to(state.device)
+#     corner_obs = torch.stack((obs_w,-1*obs_w), dim=0)
+#     obs_dim = obstacle_centre + corner_obs
+#     in_collision = torch.zeros(state.shape[0]).to(state.device)
+
+#     for i in range(state.shape[0]):
+#       obj_dim = corner + state[i,:2]
+#       if(obj_dim[0,0]<obs_dim[1,0] or
+#       obj_dim[1,0]>obs_dim[0,0] or
+#       obj_dim[0,1]<obs_dim[1,1] or
+#       obj_dim[1,1]>obs_dim[0,1]):
+#         in_collision[i] = 0
+#       else:
+#         in_collision[i] = 1
+
+#     # ---
+#     return in_collision
+
+
+# def obstacle_avoidance_pushing_cost_function(state, action):
+#     """
+#     Compute the state cost for MPPI on a setup with obstacles.
+#     :param state: torch tensor of shape (B, state_size)
+#     :param action: torch tensor of shape (B, state_size)
+#     :return: cost: torch tensor of shape (B,) containing the costs for each of the provided states
+#     """
+#     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
+#     cost = None
+#     target_pose = target_pose.to(state.device)
+#     # --- Your code here
+#     in_collision = collision_detection(state)
+#     Q = torch.tensor((
+#                 [1, 0, 0],
+#                 [0, 1, 0],
+#                 [0, 0, 0.1]
+#                 ), device=state.device)
+#     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1) + 100 * in_collision
+
+#     # ---
+#     return cost.to("cpu")
+
 def collision_detection(state):
     """
     Checks if the state is in collision with the obstacle.
@@ -273,58 +336,36 @@ def collision_detection(state):
     :return: in_collision: torch tensor of shape (B,) containing 1 if the state is in collision and 0 if not.
     """
     obstacle_centre = OBSTACLE_CENTRE_TENSOR  # torch tensor of shape (2,) consisting of obstacle centre (x, y)
-    obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
+    obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR + (OBSTACLE_HALFDIMS_TENSOR/10)  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
     box_size = BOX_SIZE  # scalar for parameter w
     in_collision = None
     # --- Your code here
-    # obstacle_corners = get_corner_coordinates(obstacle_centre.reshape(1, -1), obstacle_dims)
-    # unrotated_object_corners = get_corner_coordinates(state[:, :2], torch.tensor([box_size, box_size]))
-    # object_corners = rotate_corner_coordinates(unrotated_object_corners, state[:, -1])
-    
-    # in_collision = torch.full(size=(len(object_corners),), fill_value=-1.0, dtype=torch.float)
-    # for i in range(len(object_corners)):
-    #     in_collision[i] = is_polygon_intersecting(obstacle_corners.reshape(4, 2), object_corners[i])
-
-    w = box_size/2
-    obs_w = obstacle_dims/2
-    corner = torch.tensor([[w,w],[-w,-w]]).to(state.device)
-    corner_obs = torch.stack((obs_w,-1*obs_w), dim=0)
-    obs_dim = obstacle_centre + corner_obs
-    in_collision = torch.zeros(state.shape[0]).to(state.device)
-
-    for i in range(state.shape[0]):
-      obj_dim = corner + state[i,:2]
-      if(obj_dim[0,0]<obs_dim[1,0] or
-      obj_dim[1,0]>obs_dim[0,0] or
-      obj_dim[0,1]<obs_dim[1,1] or
-      obj_dim[1,1]>obs_dim[0,1]):
-        in_collision[i] = 0
-      else:
-        in_collision[i] = 1
-
+    in_collision = torch.zeros(len(state))
+    x2,y2,theta2,w2,h2 = obstacle_centre[0].detach().numpy(), obstacle_centre[1].detach().numpy(), 0, obstacle_dims[0].detach().numpy(), obstacle_dims[1].detach().numpy() #+(obstacle_dims[0].detach().numpy()/2   +(obstacle_dims[1].detach().numpy()/2)
+    av = rectangle_2_points(x2,y2,theta2,w2,h2)
+    for i in range(len(state)):
+      x1,y1,theta1, w1, h1 = state[i][0].detach().numpy(),state[i][1].detach().numpy(),state[i][2].detach().numpy(), box_size, box_size
+      bv = rectangle_2_points(x1,y1,theta1,w1,h1)
+      in_collision[i] = separating_axis_theorem(av, bv)
     # ---
     return in_collision
 
-
 def obstacle_avoidance_pushing_cost_function(state, action):
-    """
-    Compute the state cost for MPPI on a setup with obstacles.
-    :param state: torch tensor of shape (B, state_size)
-    :param action: torch tensor of shape (B, state_size)
-    :return: cost: torch tensor of shape (B,) containing the costs for each of the provided states
-    """
+
     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
-    target_pose = target_pose.to(state.device)
     # --- Your code here
-    in_collision = collision_detection(state)
-    Q = torch.tensor((
-                [1, 0, 0],
-                [0, 1, 0],
-                [0, 0, 0.1]
-                ), device=state.device)
-    cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1) + 100 * in_collision
-
+    
+    target_pose = target_pose.to(state.device)
+    cost=torch.zeros(len(state))
+    in_col = collision_detection(state)
+    Q = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 0.1]])
+    state_mod = state - target_pose.reshape((1,-1))
+    for i in range(state.shape[0]):
+      vec = state_mod[i:i+1,:]
+      cost_mat = torch.mm(vec, Q)
+      cost_mat = torch.matmul(cost_mat, state_mod[i]) 
+      cost[i] = cost_mat + (100*in_col[i])
     # ---
     return cost.to("cpu")
 
@@ -476,6 +517,51 @@ def is_polygon_intersecting(obstacle_corners, object_corners):
                 return 0.0
 
     return 1.0
+
+
+def rectangle_2_points(x, y, theta, w, h):
+    p = np.array([[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]])
+    # p = np.array([[-w / 2, -h / 2], [-w / 2, h / 2], [w / 2, h / 2], [w / 2, -h / 2]])
+    R = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    p = np.dot(p, R.T)
+    p += np.array([x, y])
+
+    return p.tolist()
+def normalize(vector):
+    norm = np.sqrt(vector[0] ** 2 + vector[1] ** 2)
+    return vector[0] / norm, vector[1] / norm
+
+def dot(vector1, vector2):
+    return vector1[0] * vector2[0] + vector1[1] * vector2[1]
+
+def edge_direction(point0, point1):
+    return point1[0] - point0[0], point1[1] - point0[1]
+
+def orthogonal(vector):
+    return vector[1], -vector[0]
+
+def vertices_to_edges(vertices):
+    return [edge_direction(vertices[i], vertices[(i + 1) % len(vertices)]) for i in range(len(vertices))]
+
+def project(vertices, axis):
+    dots = [dot(vertex, axis) for vertex in vertices]
+    return [min(dots), max(dots)]
+
+def overlap(projection1, projection2):
+    return min(projection1) <= max(projection2) and \
+           min(projection2) <= max(projection1)
+
+def separating_axis_theorem(vertices_a, vertices_b):
+
+    edges = vertices_to_edges(vertices_a) + vertices_to_edges(vertices_b)
+    axes = [normalize(orthogonal(edge)) for edge in edges]
+    for axis in axes:
+        projection_a = project(vertices_a, axis)
+        projection_b = project(vertices_b, axis)
+        overlapping = overlap(projection_a, projection_b)
+        if not overlapping:
+            return 0
+    return 1
 
 # ---
 # ============================================================

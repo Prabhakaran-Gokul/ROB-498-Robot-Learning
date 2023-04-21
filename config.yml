@@ -1,8 +1,9 @@
 method: 'dopri5'
-train: False
-batch_size: 500
+train: True
+batch_size: 100
 num_epochs: 20
 epochs: 20
 viz: True
-device: 'cpu'
+device: 'cpu' ##gpu not supported as of now
 adjoint: True
+lr: 1e-3
