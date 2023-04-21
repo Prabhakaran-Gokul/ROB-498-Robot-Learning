@@ -220,20 +220,15 @@ class MultiStepLoss(nn.Module):
 
         next_state_pred = state
         multi_step_loss = 0
-        # next_state_pred_arr = torch.zeros(size=(NUM_STEPS, *(state.shape)))
         losses_i = torch.zeros(actions.shape[1])
         for i in range(NUM_STEPS):
             next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
-            # next_state_pred_arr[i] = next_state_pred
-            # print(next_state_pred.shape, target_states.shape)
             loss_i = self.loss(next_state_pred, target_states[:, i, :])
             losses_i[i] = loss_i
 
         lambdas = torch.tensor([self.discount**i for i in range(actions.shape[1])])
         multi_step_loss = lambdas * losses_i
         multi_step_loss = multi_step_loss.sum()
-
-        # multi_step_loss += self.discount * self.loss(next_state_pred_arr, target_states)
 
         # multi_step_loss /= len(state)
 
@@ -265,69 +260,6 @@ def free_pushing_cost_function(state, action):
     return cost.to("cpu")
 
 
-# def collision_detection(state):
-#     """
-#     Checks if the state is in collision with the obstacle.
-#     The obstacle geometry is known and provided in obstacle_centre and obstacle_halfdims.
-#     :param state: torch tensor of shape (B, state_size)
-#     :return: in_collision: torch tensor of shape (B,) containing 1 if the state is in collision and 0 if not.
-#     """
-#     obstacle_centre = OBSTACLE_CENTRE_TENSOR  # torch tensor of shape (2,) consisting of obstacle centre (x, y)
-#     obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
-#     box_size = BOX_SIZE  # scalar for parameter w
-#     in_collision = None
-#     # --- Your code here
-#     # obstacle_corners = get_corner_coordinates(obstacle_centre.reshape(1, -1), obstacle_dims)
-#     # unrotated_object_corners = get_corner_coordinates(state[:, :2], torch.tensor([box_size, box_size]))
-#     # object_corners = rotate_corner_coordinates(unrotated_object_corners, state[:, -1])
-    
-#     # in_collision = torch.full(size=(len(object_corners),), fill_value=-1.0, dtype=torch.float)
-#     # for i in range(len(object_corners)):
-#     #     in_collision[i] = is_polygon_intersecting(obstacle_corners.reshape(4, 2), object_corners[i])
-
-#     w = box_size/2
-#     obs_w = obstacle_dims/2
-#     corner = torch.tensor([[w,w],[-w,-w]]).to(state.device)
-#     corner_obs = torch.stack((obs_w,-1*obs_w), dim=0)
-#     obs_dim = obstacle_centre + corner_obs
-#     in_collision = torch.zeros(state.shape[0]).to(state.device)
-
-#     for i in range(state.shape[0]):
-#       obj_dim = corner + state[i,:2]
-#       if(obj_dim[0,0]<obs_dim[1,0] or
-#       obj_dim[1,0]>obs_dim[0,0] or
-#       obj_dim[0,1]<obs_dim[1,1] or
-#       obj_dim[1,1]>obs_dim[0,1]):
-#         in_collision[i] = 0
-#       else:
-#         in_collision[i] = 1
-
-#     # ---
-#     return in_collision
-
-
-# def obstacle_avoidance_pushing_cost_function(state, action):
-#     """
-#     Compute the state cost for MPPI on a setup with obstacles.
-#     :param state: torch tensor of shape (B, state_size)
-#     :param action: torch tensor of shape (B, state_size)
-#     :return: cost: torch tensor of shape (B,) containing the costs for each of the provided states
-#     """
-#     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
-#     cost = None
-#     target_pose = target_pose.to(state.device)
-#     # --- Your code here
-#     in_collision = collision_detection(state)
-#     Q = torch.tensor((
-#                 [1, 0, 0],
-#                 [0, 1, 0],
-#                 [0, 0, 0.1]
-#                 ), device=state.device)
-#     cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1) + 100 * in_collision
-
-#     # ---
-#     return cost.to("cpu")
-
 def collision_detection(state):
     """
     Checks if the state is in collision with the obstacle.
@@ -336,38 +268,101 @@ def collision_detection(state):
     :return: in_collision: torch tensor of shape (B,) containing 1 if the state is in collision and 0 if not.
     """
     obstacle_centre = OBSTACLE_CENTRE_TENSOR  # torch tensor of shape (2,) consisting of obstacle centre (x, y)
-    obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR + (OBSTACLE_HALFDIMS_TENSOR/10)  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
+    obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
     box_size = BOX_SIZE  # scalar for parameter w
     in_collision = None
     # --- Your code here
-    in_collision = torch.zeros(len(state))
-    x2,y2,theta2,w2,h2 = obstacle_centre[0].detach().numpy(), obstacle_centre[1].detach().numpy(), 0, obstacle_dims[0].detach().numpy(), obstacle_dims[1].detach().numpy() #+(obstacle_dims[0].detach().numpy()/2   +(obstacle_dims[1].detach().numpy()/2)
-    av = rectangle_2_points(x2,y2,theta2,w2,h2)
-    for i in range(len(state)):
-      x1,y1,theta1, w1, h1 = state[i][0].detach().numpy(),state[i][1].detach().numpy(),state[i][2].detach().numpy(), box_size, box_size
-      bv = rectangle_2_points(x1,y1,theta1,w1,h1)
-      in_collision[i] = separating_axis_theorem(av, bv)
+    # obstacle_corners = get_corner_coordinates(obstacle_centre.reshape(1, -1), obstacle_dims)
+    # unrotated_object_corners = get_corner_coordinates(state[:, :2], torch.tensor([box_size, box_size]))
+    # object_corners = rotate_corner_coordinates(unrotated_object_corners, state[:, -1])
+    
+    # in_collision = torch.full(size=(len(object_corners),), fill_value=-1.0, dtype=torch.float)
+    # for i in range(len(object_corners)):
+    #     in_collision[i] = is_polygon_intersecting(obstacle_corners.reshape(4, 2), object_corners[i])
+
+    w = box_size/2
+    obs_w = obstacle_dims/2
+    corner = torch.tensor([[w,w],[-w,-w]]).to(state.device)
+    corner_obs = torch.stack((obs_w,-1*obs_w), dim=0)
+    obs_dim = obstacle_centre + corner_obs
+    in_collision = torch.zeros(state.shape[0]).to(state.device)
+
+    for i in range(state.shape[0]):
+      obj_dim = corner + state[i,:2]
+      if(obj_dim[0,0]<obs_dim[1,0] or
+      obj_dim[1,0]>obs_dim[0,0] or
+      obj_dim[0,1]<obs_dim[1,1] or
+      obj_dim[1,1]>obs_dim[0,1]):
+        in_collision[i] = 0
+      else:
+        in_collision[i] = 1
+
     # ---
     return in_collision
 
-def obstacle_avoidance_pushing_cost_function(state, action):
 
+def obstacle_avoidance_pushing_cost_function(state, action):
+    """
+    Compute the state cost for MPPI on a setup with obstacles.
+    :param state: torch tensor of shape (B, state_size)
+    :param action: torch tensor of shape (B, state_size)
+    :return: cost: torch tensor of shape (B,) containing the costs for each of the provided states
+    """
     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
-    # --- Your code here
-    
     target_pose = target_pose.to(state.device)
-    cost=torch.zeros(len(state))
-    in_col = collision_detection(state)
-    Q = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 0.1]])
-    state_mod = state - target_pose.reshape((1,-1))
-    for i in range(state.shape[0]):
-      vec = state_mod[i:i+1,:]
-      cost_mat = torch.mm(vec, Q)
-      cost_mat = torch.matmul(cost_mat, state_mod[i]) 
-      cost[i] = cost_mat + (100*in_col[i])
+    # --- Your code here
+    in_collision = collision_detection(state)
+    Q = torch.tensor((
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 0.1]
+                ), device=state.device)
+    cost = torch.sum((state - target_pose) @ Q * (state - target_pose), 1) + 100 * in_collision
+
     # ---
     return cost.to("cpu")
+
+# def collision_detection(state):
+#     """
+#     Checks if the state is in collision with the obstacle.
+#     The obstacle geometry is known and provided in obstacle_centre and obstacle_halfdims.
+#     :param state: torch tensor of shape (B, state_size)
+#     :return: in_collision: torch tensor of shape (B,) containing 1 if the state is in collision and 0 if not.
+#     """
+#     obstacle_centre = OBSTACLE_CENTRE_TENSOR  # torch tensor of shape (2,) consisting of obstacle centre (x, y)
+#     obstacle_dims = 2 * OBSTACLE_HALFDIMS_TENSOR #+ (OBSTACLE_HALFDIMS_TENSOR/10)  # torch tensor of shape (2,) consisting of (w_obs, l_obs)
+#     box_size = BOX_SIZE  # scalar for parameter w
+#     in_collision = None
+#     # --- Your code here
+#     in_collision = torch.zeros(len(state))
+#     x2,y2,theta2,w2,h2 = obstacle_centre[0].detach().numpy(), obstacle_centre[1].detach().numpy(), 0, obstacle_dims[0].detach().numpy(), obstacle_dims[1].detach().numpy() #+(obstacle_dims[0].detach().numpy()/2   +(obstacle_dims[1].detach().numpy()/2)
+#     av = rectangle_2_points(x2,y2,theta2,w2,h2)
+#     for i in range(len(state)):
+#       x1,y1,theta1, w1, h1 = state[i][0].detach().numpy(),state[i][1].detach().numpy(),state[i][2].detach().numpy(), box_size, box_size
+#       bv = rectangle_2_points(x1,y1,theta1,w1,h1)
+#       in_collision[i] = separating_axis_theorem(av, bv)
+#     # ---
+#     return in_collision
+
+# def obstacle_avoidance_pushing_cost_function(state, action):
+
+#     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
+#     cost = None
+#     # --- Your code here
+    
+#     target_pose = target_pose.to(state.device)
+#     cost=torch.zeros(len(state))
+#     in_col = collision_detection(state)
+#     Q = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 0.1]])
+#     state_mod = state - target_pose.reshape((1,-1))
+#     for i in range(state.shape[0]):
+#       vec = state_mod[i:i+1,:]
+#       cost_mat = torch.mm(vec, Q)
+#       cost_mat = torch.matmul(cost_mat, state_mod[i]) 
+#       cost[i] = cost_mat + (100*in_col[i])
+#     # ---
+#     return cost.to("cpu")
 
 
 class PushingController(object):

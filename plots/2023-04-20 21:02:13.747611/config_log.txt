@@ -1,0 +1,13 @@
+
+##########ENTER##########
+num_epochs:  20
+control_epochs:  20
+device:  cpu
+ode_method:  <function odeint_adjoint at 0x7f7e1b7b29e0>
+
+##########TRAINING##########
+architecture:  [Linear(in_features=6, out_features=100, bias=True), ReLU(), Linear(in_features=100, out_features=100, bias=True), ReLU(), Linear(in_features=100, out_features=6, bias=True)]
+timesteps:  tensor([0.0000, 0.3333, 0.6667, 1.0000])
+training_integration_method:  dopri5
+learning rate:  0.001
+optimizer:  <class 'torch.optim.adam.Adam'>
