@@ -237,7 +237,8 @@ def train_ode(dir, f,
                                                                            num_pts_for_intp=num_pts_for_intp, device=device
                                                                            )
     f.write("training_integration_method:  "+method+"\n")
-    collected_data = np.load(os.path.join("./", 'collected_data.npy'), allow_pickle=True)
+    curr_dir, _ = os.path.split(os.path.realpath(__file__))
+    collected_data = np.load(os.path.join(curr_dir, 'collected_data.npy'), allow_pickle=True)
     train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=batch_size)
 
     pose_loss = SE2PoseLoss(block_width=0.1, block_length=0.1).to(device)
@@ -479,10 +480,12 @@ def run(method, pts_for_intp, hidden_layer, hidden_layer_neuron):
         odeint = odeint_adj
     else:
         odeint = odeint_norm
-    dir = "./plots/" + str(datetime.datetime.now())
-    if not os.path.exists('./plots'):
-        os.mkdir('./plots')
-    os.mkdir(dir)
+    curr_dir, _ = os.path.split(os.path.realpath(__file__))
+    dir = os.path.join(curr_dir, "plots", str(datetime.datetime.now()))
+    plots_dir = os.path.join(curr_dir, "plots")
+    if not os.path.exists(plots_dir):
+        os.mkdir(dir)
+    # os.mkdir(dir)
 
     with open(dir+"/config_log.txt", "a") as f:
         f.write("\n##########ENTER##########\n")
@@ -502,24 +505,24 @@ def run(method, pts_for_intp, hidden_layer, hidden_layer_neuron):
                       hidden_layer=hidden_layer,
                       hidden_layer_neuron=hidden_layer_neuron)
             
-        # print("CONTROL - OBSTACLE FREE")
+        print("CONTROL - OBSTACLE FREE")
 
-        # f.write("\n##########CONTROL - OBSTACLE FREE##########\n")
-        # obstacle_free_controller(dir=dir, f=f,
-        #                          method=method, odeint=odeint, 
-        #                          device=device, num_pts_for_intp=pts_for_intp, 
-        #                          num_steps_max=num_steps_max,
-        #                          hidden_layer=hidden_layer,
-        #                          hidden_layer_neuron=hidden_layer_neuron)         
-        # print("CONTROL - W/ OBSTACLE")
+        f.write("\n##########CONTROL - OBSTACLE FREE##########\n")
+        obstacle_free_controller(dir=dir, f=f,
+                                 method=method, odeint=odeint, 
+                                 device=device, num_pts_for_intp=pts_for_intp, 
+                                 num_steps_max=num_steps_max,
+                                 hidden_layer=hidden_layer,
+                                 hidden_layer_neuron=hidden_layer_neuron)         
+        print("CONTROL - W/ OBSTACLE")
         
-        # f.write("\n##########CONTROL - W/ OBSTACLE##########\n")
-        # obstacle_controller(dir=dir, f=f, 
-        #                     method=method, odeint=odeint, 
-        #                     device=device, num_pts_for_intp=pts_for_intp,
-        #                     num_steps_max=num_steps_max,
-        #                     hidden_layer=hidden_layer,
-        #                     hidden_layer_neuron=hidden_layer_neuron) 
+        f.write("\n##########CONTROL - W/ OBSTACLE##########\n")
+        obstacle_controller(dir=dir, f=f, 
+                            method=method, odeint=odeint, 
+                            device=device, num_pts_for_intp=pts_for_intp,
+                            num_steps_max=num_steps_max,
+                            hidden_layer=hidden_layer,
+                            hidden_layer_neuron=hidden_layer_neuron) 
         
         print("EVALUATION")
         f.write("\n##########EVALUATION##########\n")
