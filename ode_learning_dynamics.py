@@ -38,36 +38,52 @@ def read_params(config_file):
     lr = float(config['lr'])
     num_pts_for_intp = config['num_pts_for_intp']
 
-    return method, train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr, num_pts_for_intp
+    return train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr
 
 
 def read_grid_search_params(config_file):
     with open(config_file, 'r') as file:
         config = yaml.safe_load(file)
 
-    methods = config[methods]
-    num_of_steps = config[num_of_steps]
-    hidden_layers = config[hidden_layers]
-    hidden_layer_neurons = config[hidden_layer_neurons]
+    methods = config['methods']
+    num_pts_for_intp = config['num_pts_for_intp']
+    hidden_layers = config['hidden_layers']
+    hidden_layer_neurons = config['hidden_layer_neurons']
 
-    return methods, num_of_steps, num_of_steps, hidden_layers, hidden_layer_neurons 
+    return methods, num_pts_for_intp, hidden_layers, hidden_layer_neurons 
 
 
 class ODEDynamicsModel(nn.Module):
 
-    def __init__(self, state_dim, action_dim, f, device='cpu'):
+    def __init__(self, state_dim, action_dim, f, device='cpu',
+                 hidden_layer=1,
+                 hidden_layer_neuron=100):
+        
         super(ODEDynamicsModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.device = device
+        self.activation_func = nn.ReLU()
 
-        self.net = nn.Sequential(
-            nn.Linear(self.state_dim + action_dim, 100),
-            nn.ReLU(),
-            nn.Linear(100, 100),
-            nn.ReLU(),
-            nn.Linear(100, self.state_dim + action_dim)
-            ).to(device)
+        # create neural network layers
+        modules = []
+        input_layer = nn.Linear(self.state_dim + action_dim, hidden_layer_neuron)
+        modules.append(input_layer)
+        modules.append(self.activation_func)
+        for layer in range(hidden_layer):
+            modules.append(nn.Linear(hidden_layer_neuron, hidden_layer_neuron))
+            modules.append(self.activation_func)
+        output_layer = nn.Linear(hidden_layer_neuron, self.state_dim + action_dim)
+        modules.append(output_layer)
+        self.net = nn.Sequential(*modules).to(device)
+
+        # self.net = nn.Sequential(
+        #     nn.Linear(self.state_dim + action_dim, 100),
+        #     nn.ReLU(),
+        #     nn.Linear(100, 100),
+        #     nn.ReLU(),
+        #     nn.Linear(100, self.state_dim + action_dim)
+        #     ).to(device)
         log_var = [module for module in self.net.modules() if not isinstance(module, nn.Sequential)]
         f.write("architecture:  " + str(log_var) + "\n")
 
@@ -173,7 +189,9 @@ def val_step(model, val_loader, loss_func, device) -> float:
     return val_loss/len(val_loader)
 
 
-def train_model(model, train_dataloader, val_dataloader, optimizer, loss_func, num_epochs=1000, device='cpu'):
+def train_model(model, train_dataloader, val_dataloader, 
+                optimizer, loss_func, num_epochs=1000, 
+                device='cpu'):
     """
     Trains the given model for `num_epochs` epochs. Use Adam as an optimizer.
     You may need to use `train_step` and `val_step`.
@@ -201,13 +219,23 @@ def train_model(model, train_dataloader, val_dataloader, optimizer, loss_func, n
     return train_losses, val_losses
 
 
-def train_ode(dir, f, method, odeint, lr=1e-3, num_epochs=10, device='cpu', batch_size=100, viz=True, num_pts_for_intp=4):
-    pushing_multistep_ODE_dynamics_model = ODEDynamicsModel(3, 3, f).to(device)
+def train_ode(dir, f, 
+              method, odeint, 
+              lr=1e-3, num_epochs=10, 
+              device='cpu', batch_size=100, 
+              viz=True, num_pts_for_intp=4,
+              hidden_layer=1, hidden_layer_neuron=100):
+    
+    pushing_multistep_ODE_dynamics_model = ODEDynamicsModel(3, 3, f,
+                                                            hidden_layer=hidden_layer,
+                                                            hidden_layer_neuron=hidden_layer_neuron,
+                                                            device=device)
     pushing_multistep_ODE_dynamics_model_wrapper = ODEDynamicsModelWrapper(odeint, 
                                                                            pushing_multistep_ODE_dynamics_model, 
                                                                            f, 
                                                                            method=method, 
-                                                                           num_pts_for_intp=num_pts_for_intp).to(device)
+                                                                           num_pts_for_intp=num_pts_for_intp, device=device
+                                                                           )
     f.write("training_integration_method:  "+method+"\n")
     collected_data = np.load(os.path.join("./", 'collected_data.npy'), allow_pickle=True)
     train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=batch_size)
@@ -226,12 +254,11 @@ def train_ode(dir, f, method, odeint, lr=1e-3, num_epochs=10, device='cpu', batc
                                            loss_func=pose_loss,
                                            num_epochs=num_epochs,
                                            device=device)
-    
 
     # save model:
-    model_save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
+    # model_save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
     model_log_path = os.path.join(dir, 'pushing_multi_step_ode_dynamics_model.pt')
-    torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_save_path)
+    # torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_save_path)
     torch.save(pushing_multistep_ODE_dynamics_model_wrapper.state_dict(), model_log_path)
 
     # plot train loss and test loss:
@@ -240,10 +267,11 @@ def train_ode(dir, f, method, odeint, lr=1e-3, num_epochs=10, device='cpu', batc
     return pushing_multistep_ODE_dynamics_model_wrapper
 
 
-def obstacle_free_controller(dir, f, method, odeint, device='cpu', num_steps_max=20):
-    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ODEDynamicsModel(3, 3, f), f=f, method=method)
-    f.write("obstacle_free_integration_method:  "+method+"\n")
-    model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
+def obstacle_free_controller(dir, f, method, odeint, device='cpu', num_pts_for_intp=4, num_steps_max=20, hidden_layer=1, hidden_layer_neuron=100):
+    ode_dynamics_model = ODEDynamicsModel(3, 3, f, hidden_layer=hidden_layer, hidden_layer_neuron=hidden_layer_neuron)
+    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ode_dynamics_model, num_pts_for_intp=num_pts_for_intp, f=f, method=method)
+    f.write("obstacle_free_integration_method:  " + method + "\n")
+    model.load_state_dict(torch.load(os.path.join(dir, 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device(device)))
     model = model.to(device)
 
     # Control on an obstacle free environment
@@ -286,10 +314,16 @@ def obstacle_free_controller(dir, f, method, odeint, device='cpu', num_steps_max
     Image(visualizer.get_gif(dir=dir, obs=0))
 
 
-def obstacle_controller(dir, f, method, odeint, device='cpu', num_steps_max=20):
-    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ODEDynamicsModel(3, 3, f), f=f, method=method)
-    f.write("obstacle_integration_method:  "+method+"\n")
-    model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
+def obstacle_controller(dir, f, 
+                        method, odeint, 
+                        device='cpu', num_pts_for_intp=4, 
+                        num_steps_max=20, hidden_layer=1, 
+                        hidden_layer_neuron=100):
+
+    ode_dynamics_model = ODEDynamicsModel(3, 3, f, hidden_layer=hidden_layer, hidden_layer_neuron=hidden_layer_neuron)
+    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ode_dynamics_model, num_pts_for_intp=num_pts_for_intp, f=f, method=method)
+    f.write("obstacle_integration_method:  "+ method +"\n")
+    model.load_state_dict(torch.load(os.path.join(dir, 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device(device)))
     model = model.to(device)
     # Control on an obstacle free environment
 
@@ -333,14 +367,20 @@ def obstacle_controller(dir, f, method, odeint, device='cpu', num_steps_max=20):
     Image(filename=visualizer.get_gif(dir, obs=1))
 
 
-def eval_learned_dynamics(dir, f, method, odeint, device='cpu', viz='True'):
+def eval_learned_dynamics(dir, f, 
+                          method, odeint, device='cpu', 
+                          num_pts_for_intp=4,
+                          hidden_layer=1,
+                          hidden_layer_neuron=100,
+                          viz='True'):
     # load pretrained model
-    ODE_model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ODEDynamicsModel(3, 3,f),f=f, method=method)
+    ode_dynamics_model = ODEDynamicsModel(3, 3, f, hidden_layer=hidden_layer, hidden_layer_neuron=hidden_layer_neuron)
+    model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ode_dynamics_model, num_pts_for_intp=num_pts_for_intp, f=f, method=method)
     pose_error_func = SE2PoseLoss(block_width=0.1, block_length=0.1).to(device)
 
     f.write("eval_integration_method:  " + method + "\n")
 
-    ODE_model.load_state_dict(torch.load(os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device("cuda:0")))
+    model.load_state_dict(torch.load(os.path.join(dir, 'pushing_multi_step_ode_dynamics_model.pt'), map_location=torch.device(device)))
 
     # Initialize the simulation environment
     env = PandaPushingEnv(visualizer=None, 
@@ -360,7 +400,7 @@ def eval_learned_dynamics(dir, f, method, odeint, device='cpu', viz='True'):
     for i in tqdm(range(30)):
         action_i = env.action_space.sample()
         
-        pred_state = ODE_model(torch.tensor(pred_state).reshape(1, -1).to(device), 
+        pred_state = model(torch.tensor(pred_state).reshape(1, -1).to(device), 
                                torch.tensor(action_i).reshape(1, -1).to(device))
         gt_state, reward, done, info = env.step(action_i)
 
@@ -432,8 +472,8 @@ def plot_trajectory(pred_states, gt_states, se2_errors, dir, viz):
         plt.show()
 
 
-def run():
-    method, train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr, num_pts_for_intp = read_params(config_file="config.yml")
+def run(method, pts_for_intp, hidden_layer, hidden_layer_neuron):
+    train, num_epochs, batch_size, viz, device, adjoint, num_steps_max, lr = read_params(config_file="config.yml")
     
     if adjoint:
         odeint = odeint_adj
@@ -454,26 +494,59 @@ def run():
         if train:
             print("Training")
             f.write("\n##########TRAINING##########\n")
-            train_ode(dir=dir, f=f, method=method, odeint=odeint, lr=lr, num_epochs=num_epochs, device=device, batch_size=batch_size, viz=viz, num_pts_for_intp=num_pts_for_intp)
-        print("CONTROL - OBSTACLE FREE")
+            train_ode(dir=dir, f=f, 
+                      method=method, odeint=odeint, 
+                      lr=lr, num_epochs=num_epochs, 
+                      device=device, batch_size=batch_size, 
+                      viz=viz, num_pts_for_intp=pts_for_intp,
+                      hidden_layer=hidden_layer,
+                      hidden_layer_neuron=hidden_layer_neuron)
+            
+        # print("CONTROL - OBSTACLE FREE")
 
-        f.write("\n##########CONTROL - OBSTACLE FREE##########\n")
-        obstacle_free_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, num_steps_max=num_steps_max)         
-        print("CONTROL - W/ OBSTACLE")
+        # f.write("\n##########CONTROL - OBSTACLE FREE##########\n")
+        # obstacle_free_controller(dir=dir, f=f,
+        #                          method=method, odeint=odeint, 
+        #                          device=device, num_pts_for_intp=pts_for_intp, 
+        #                          num_steps_max=num_steps_max,
+        #                          hidden_layer=hidden_layer,
+        #                          hidden_layer_neuron=hidden_layer_neuron)         
+        # print("CONTROL - W/ OBSTACLE")
         
-        f.write("\n##########CONTROL - W/ OBSTACLE##########\n")
-        obstacle_controller(dir=dir, f=f, method=method, odeint=odeint, device=device, num_steps_max=num_steps_max) 
+        # f.write("\n##########CONTROL - W/ OBSTACLE##########\n")
+        # obstacle_controller(dir=dir, f=f, 
+        #                     method=method, odeint=odeint, 
+        #                     device=device, num_pts_for_intp=pts_for_intp,
+        #                     num_steps_max=num_steps_max,
+        #                     hidden_layer=hidden_layer,
+        #                     hidden_layer_neuron=hidden_layer_neuron) 
         
         print("EVALUATION")
         f.write("\n##########EVALUATION##########\n")
-        eval_learned_dynamics(dir=dir, f=f, method=method, odeint=odeint, device = device, viz=viz)
+        eval_learned_dynamics(dir=dir, f=f, 
+                              method=method, odeint=odeint, 
+                              device = device, num_pts_for_intp=pts_for_intp,
+                              hidden_layer=hidden_layer,
+                              hidden_layer_neuron=hidden_layer_neuron,
+                              viz=viz)
 
 
 def grid_search():
-    methods, num_of_steps, num_of_steps, hidden_layers, hidden_layer_neurons = read_grid_search_params(config_file="grid_search.yml")
+    methods, num_pts_for_intp, hidden_layers, hidden_layer_neurons = read_grid_search_params(config_file="grid_search.yml")
     for method in methods:
-        for num_of_step in num_of_steps:
+        for pts_for_intp in num_pts_for_intp:
             for hidden_layer in hidden_layers:
                 for hidden_layer_neuron in hidden_layer_neurons:
-                    run()
+                    run(method, pts_for_intp, hidden_layer, hidden_layer_neuron)
 
+
+def main(run_grid_search=False):
+    if not run_grid_search:
+        method = "dopri5"
+        pts_for_intp = 4
+        hidden_layer = 1
+        hidden_layer_neuron = 100
+        run(method, pts_for_intp, hidden_layer, hidden_layer_neuron)
+
+    else:
+        grid_search()

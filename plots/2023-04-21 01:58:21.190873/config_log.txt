@@ -1,0 +1,8 @@
+
+##########ENTER##########
+num_epochs:  40
+control_epochs:  20
+device:  cpu
+ode_method:  <function odeint_adjoint at 0x7fb889c8eef0>
+
+##########CONTROL - OBSTACLE FREE##########

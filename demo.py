@@ -1,5 +1,4 @@
-from ode_learning_dynamics import run
+from ode_learning_dynamics import main
 
 if __name__ == "__main__":
-    run()
-
+    main(run_grid_search=True)

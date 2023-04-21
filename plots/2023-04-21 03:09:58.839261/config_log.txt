@@ -1,0 +1,18 @@
+
+##########ENTER##########
+num_epochs:  4
+control_epochs:  20
+device:  cpu
+ode_method:  <function odeint_adjoint at 0x7f60723e2f80>
+
+##########TRAINING##########
+architecture:  [Linear(in_features=6, out_features=100, bias=True), ReLU(), Linear(in_features=100, out_features=100, bias=True), Linear(in_features=100, out_features=100, bias=True), Linear(in_features=100, out_features=6, bias=True)]
+timesteps:  tensor([0.0000, 0.1667, 0.3333, 0.5000, 0.6667, 0.8333])
+training_integration_method:  rk4
+learning rate:  0.001
+optimizer:  <class 'torch.optim.adam.Adam'>
+
+##########EVALUATION##########
+architecture:  [Linear(in_features=6, out_features=100, bias=True), ReLU(), Linear(in_features=100, out_features=100, bias=True), Linear(in_features=100, out_features=100, bias=True), Linear(in_features=100, out_features=6, bias=True)]
+timesteps:  tensor([0.0000, 0.1667, 0.3333, 0.5000, 0.6667, 0.8333])
+eval_integration_method:  rk4
