@@ -99,13 +99,13 @@ class ODEDynamicsModelWrapper(nn.Module):
     """
     def __init__(self,
                  odeint, 
-                 ode_dynamics_model: ODEDynamicsModel, 
+                 ode_dynamics_model:ODEDynamicsModel, 
                  f, device='cpu', 
                  method='dopri5', 
                  num_pts_for_intp=4) -> None:
         
         super(ODEDynamicsModelWrapper, self).__init__()
-        self.ode_dynamics_model = ode_dynamics_model
+        self.ode_dynamics_model = ode_dynamics_model.to(device)
         self.t = torch.linspace(start=0, end=1, 
                                 steps=num_pts_for_intp+1, 
                                 dtype=torch.float32, device=device)
@@ -127,10 +127,10 @@ class ODEDynamicsModelWrapper(nn.Module):
         out = self.odeint(self.ode_dynamics_model,
                      input_to_ode, 
                      self.t,
-                     method = self.method)
+                     method = self.method).to(self.device)
         
         # retrieve the next state prediction
-        out = out[1]
+        out = out[-1]
         out = out[:, :3]
         
         return out
@@ -179,9 +179,9 @@ def val_step(model, val_loader, loss_func, device) -> float:
     for batch_idx, data in enumerate(val_loader):
         loss = None
         # --- Your code here
-        state = data["state"]
-        action = data["action"]
-        next_state = data["next_state"]
+        state = data["state"].to(device)
+        action = data["action"].to(device)
+        next_state = data["next_state"].to(device)
         loss = loss_func(model, state, action, next_state)
 
         # ---
@@ -242,7 +242,7 @@ def train_ode(dir, f,
     train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=batch_size)
 
     pose_loss = SE2PoseLoss(block_width=0.1, block_length=0.1).to(device)
-    pose_loss = MultiStepLoss(pose_loss, discount=0.9).to(device)
+    pose_loss = MultiStepLoss(pose_loss, discount=0.99).to(device)
 
     optimizer = optim.Adam(pushing_multistep_ODE_dynamics_model_wrapper.parameters(), lr=lr)
     f.write("learning rate:  " + str(lr) + "\n")
@@ -484,8 +484,8 @@ def run(method, pts_for_intp, hidden_layer, hidden_layer_neuron):
     dir = os.path.join(curr_dir, "plots", str(datetime.datetime.now()))
     plots_dir = os.path.join(curr_dir, "plots")
     if not os.path.exists(plots_dir):
-        os.mkdir(dir)
-    # os.mkdir(dir)
+        os.mkdir(curr_dir)
+    os.mkdir(dir)
 
     with open(dir+"/config_log.txt", "a") as f:
         f.write("\n##########ENTER##########\n")

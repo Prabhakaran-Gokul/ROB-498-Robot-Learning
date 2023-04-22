@@ -1,7 +1,7 @@
 method: 'dopri5'
 train: True
-batch_size: 100
-num_epochs: 4
+batch_size: 20
+num_epochs: 50
 num_steps_max: 20
 viz: True
 device: 'cpu' # gpu not supported as of now

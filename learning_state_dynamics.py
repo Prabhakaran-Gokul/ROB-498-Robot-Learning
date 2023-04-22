@@ -231,6 +231,7 @@ class MultiStepLoss(nn.Module):
         multi_step_loss = multi_step_loss.sum()
 
         # multi_step_loss /= len(state)
+        # multi_step_loss /= NUM_STEPS
 
         # ---
         return multi_step_loss
