@@ -4,7 +4,7 @@
 # hidden_layer_neurons: [100, 200]
 # num_pts_for_intp: [4, 6, 8] # number of points for interpolation
 
-methods: ['rk4']
+methods: ['dopri5']
 num_of_steps: [4, 6]
 hidden_layers: [2, 3]
 hidden_layer_neurons: [100]
