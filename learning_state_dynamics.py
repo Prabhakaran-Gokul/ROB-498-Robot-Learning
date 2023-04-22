@@ -195,6 +195,8 @@ class SE2PoseLoss(nn.Module):
         se2_pose_loss = loss_func(x_pred, x_target) + \
                         loss_func(y_pred, y_target) + \
                         rg * loss_func(theta_pred, theta_target)
+        # print(se2_pose_loss.shape, x_pred.shape, x_target.shape, loss_func(x_pred, x_target).shape, loss_func(x_pred, x_target))
+        # assert len(se2_pose_loss.shape)==2
 
         # ---
         return se2_pose_loss
@@ -219,17 +221,26 @@ class MultiStepLoss(nn.Module):
         target_states = target_states.to(state.device)
 
         next_state_pred = state
+        current_state = state
         multi_step_loss = 0
         losses_i = torch.zeros(actions.shape[1])
+        # for i in range(NUM_STEPS):
+        #     next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
+        #     loss_i = self.loss(next_state_pred, target_states[:, i, :])
+        #     losses_i[i] = loss_i
         for i in range(NUM_STEPS):
-            next_state_pred = model.forward(next_state_pred, actions[:, i, :]) 
+            next_state_pred = model.forward(current_state, actions[:, i, :]) 
             loss_i = self.loss(next_state_pred, target_states[:, i, :])
             losses_i[i] = loss_i
+            current_state = next_state_pred
+
+
 
         lambdas = torch.tensor([self.discount**i for i in range(actions.shape[1])])
         multi_step_loss = lambdas * losses_i
         multi_step_loss = multi_step_loss.sum()
 
+        # multi_step_loss /= NUM_STEPS
         # multi_step_loss /= len(state)
 
         # ---
@@ -381,7 +392,7 @@ class PushingController(object):
         state_dim = env.observation_space.shape[0]
         u_min = torch.from_numpy(env.action_space.low)
         u_max = torch.from_numpy(env.action_space.high)
-        noise_sigma = 0.5 * torch.eye(env.action_space.shape[0])
+        noise_sigma = 0.1 * torch.eye(env.action_space.shape[0])
         lambda_value = 0.01
         # ---
         from mppi import MPPI
@@ -409,7 +420,7 @@ class PushingController(object):
         # ---
         return next_state
 
-    def control(self, state):
+    def control(self, state, device='cpu'):
         """
         Query MPPI and return the optimal action given the current state <state>
         :param state: numpy array of shape (state_size,) representing current state
@@ -422,7 +433,7 @@ class PushingController(object):
         state_tensor = None
         # --- Your code here
         # state_tensor = torch.from_numpy(state[:3])
-        state_tensor = torch.from_numpy(state)
+        state_tensor = torch.from_numpy(state).to(device=device)
 
         # ---
         action_tensor = self.mppi.command(state_tensor)

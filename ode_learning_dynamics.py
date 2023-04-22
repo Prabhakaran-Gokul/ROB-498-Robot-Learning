@@ -72,7 +72,10 @@ class ODEDynamicsModel(nn.Module):
         modules.append(self.activation_func)
         for layer in range(hidden_layer):
             modules.append(nn.Linear(hidden_layer_neuron, hidden_layer_neuron))
-            modules.append(self.activation_func)
+            modules.append(nn.ReLU())
+
+            # modules.append(self.activation_func)
+
         output_layer = nn.Linear(hidden_layer_neuron, self.state_dim + action_dim)
         modules.append(output_layer)
         self.net = nn.Sequential(*modules).to(device)
@@ -130,7 +133,8 @@ class ODEDynamicsModelWrapper(nn.Module):
                      method = self.method)
         
         # retrieve the next state prediction
-        out = out[1]
+        out = out[-1]
+        # out = out[1]
         out = out[:, :3]
         
         return out
@@ -239,10 +243,10 @@ def train_ode(dir, f,
     f.write("training_integration_method:  "+method+"\n")
     curr_dir, _ = os.path.split(os.path.realpath(__file__))
     collected_data = np.load(os.path.join(curr_dir, 'collected_data.npy'), allow_pickle=True)
-    train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=batch_size)
+    train_loader, val_loader = process_data_multiple_step(collected_data, batch_size=batch_size)#, num_steps=num_pts_for_intp)
 
     pose_loss = SE2PoseLoss(block_width=0.1, block_length=0.1).to(device)
-    pose_loss = MultiStepLoss(pose_loss, discount=0.9).to(device)
+    pose_loss = MultiStepLoss(pose_loss, discount=0.99).to(device)
 
     optimizer = optim.Adam(pushing_multistep_ODE_dynamics_model_wrapper.parameters(), lr=lr)
     f.write("learning rate:  " + str(lr) + "\n")
@@ -255,6 +259,9 @@ def train_ode(dir, f,
                                            loss_func=pose_loss,
                                            num_epochs=num_epochs,
                                            device=device)
+
+    f.write("train_loss:  " + str(type(train_losses[-1])) + "\n")
+    f.write("val_loss:  " + str(type(val_losses[-1])) + "\n")
 
     # save model:
     # model_save_path = os.path.join("./", 'pushing_multi_step_ode_dynamics_model.pt')
@@ -291,7 +298,7 @@ def obstacle_free_controller(dir, f, method, odeint, device='cpu', num_pts_for_i
     f.write("max_steps:  " + str(num_steps_max) + "\n")
     for i in tqdm(range(num_steps_max)):
         while not is_valid_action:
-            action = controller.control(state)
+            action = controller.control(state, device=device)
             is_valid_action = env.check_action_valid(action)
         is_valid_action = False
         
@@ -346,7 +353,7 @@ def obstacle_controller(dir, f,
 
     for i in tqdm(range(num_steps_max)):
         while not is_valid_action:
-            action = controller.control(state)
+            action = controller.control(state, device=device)
             is_valid_action = env.check_action_valid(action)
         is_valid_action = False
         
@@ -420,6 +427,22 @@ def eval_learned_dynamics(dir, f,
     plot_trajectory(pred_states, gt_states, se2_errors, dir, viz)
 
 
+def testing(f, odeint, method, num_pts_for_intp, hidden_layer, hidden_layer_neuron,):
+        val_multistep_dataset = MultiStepDynamicsDataset(np.load('validation_data.npy', allow_pickle=True), num_steps=num_pts_for_intp)
+        val_multistep_loader = torch.utils.data.DataLoader(val_multistep_dataset, batch_size=len(val_multistep_dataset))
+        multi_step_loss = 0
+        pose_loss = SE2PoseLoss(block_width=0.1, block_length=0.1)
+        multistep_pose_loss = MultiStepLoss(pose_loss, discount=0.99)
+
+        ode_dynamics_model = ODEDynamicsModel(3, 3, f, hidden_layer=hidden_layer, hidden_layer_neuron=hidden_layer_neuron)
+        model = ODEDynamicsModelWrapper(odeint, ode_dynamics_model=ode_dynamics_model, num_pts_for_intp=num_pts_for_intp, f=f, method=method)
+        for item in val_multistep_loader:
+            multi_step_loss += \
+                multistep_pose_loss(model, item['state'], item['action'], item['next_state'])
+        
+        f.write("test_loss:  "+str(multi_step_loss))
+        print("test_loss:  "+str(multi_step_loss))
+
 # Plot functions
 
 def plot_losses(train_losses, val_losses, dir, f, viz):
@@ -482,12 +505,15 @@ def run(method, pts_for_intp, hidden_layer, hidden_layer_neuron):
         odeint = odeint_norm
     curr_dir, _ = os.path.split(os.path.realpath(__file__))
     dir = os.path.join(curr_dir, "plots", str(datetime.datetime.now()))
+    if not os.path.exists(dir):
+        os.mkdir(dir)
     plots_dir = os.path.join(curr_dir, "plots")
     if not os.path.exists(plots_dir):
         os.mkdir(dir)
     # os.mkdir(dir)
 
     with open(dir+"/config_log.txt", "a") as f:
+        print("logging to:   "+dir+"/config_log.txt \n")
         f.write("\n##########ENTER##########\n")
         f.write("num_epochs:  "+str(num_epochs)+"\n")
         f.write("control_epochs:  "+str(num_steps_max)+"\n")
@@ -533,6 +559,11 @@ def run(method, pts_for_intp, hidden_layer, hidden_layer_neuron):
                               hidden_layer_neuron=hidden_layer_neuron,
                               viz=viz)
 
+        print("TESTING")
+        f.write("\n##########TESTING##########\n")
+        testing(f, odeint=odeint, method=method, num_pts_for_intp=pts_for_intp, hidden_layer=hidden_layer, hidden_layer_neuron=hidden_layer_neuron)
+          
+
 
 def grid_search():
     methods, num_pts_for_intp, hidden_layers, hidden_layer_neurons = read_grid_search_params(config_file="grid_search.yml")
@@ -540,6 +571,7 @@ def grid_search():
         for pts_for_intp in num_pts_for_intp:
             for hidden_layer in hidden_layers:
                 for hidden_layer_neuron in hidden_layer_neurons:
+                    print(method, pts_for_intp, hidden_layer, hidden_layer_neuron,"params")
                     run(method, pts_for_intp, hidden_layer, hidden_layer_neuron)
 
 
@@ -547,7 +579,7 @@ def main(run_grid_search=False):
     if not run_grid_search:
         method = "dopri5"
         pts_for_intp = 4
-        hidden_layer = 1
+        hidden_layer = 2
         hidden_layer_neuron = 100
         run(method, pts_for_intp, hidden_layer, hidden_layer_neuron)
 

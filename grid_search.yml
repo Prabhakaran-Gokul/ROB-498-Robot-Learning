@@ -1,11 +1,19 @@
-# methods: ['rk4', 'dopri5', 'euler']
+# # methods: ['rk4', 'dopri5', 'euler']
+# methods: ['rk4', 'dopri5', 'bosh3']
 # num_of_steps: [4, 6, 8]
 # hidden_layers: [2, 3]
 # hidden_layer_neurons: [100, 200]
 # num_pts_for_intp: [4, 6, 8] # number of points for interpolation
 
-methods: ['rk4']
-num_of_steps: [4, 6]
+# methods: ['rk4']
+# num_of_steps: [4, 6]
+# hidden_layers: [3]
+# hidden_layer_neurons: [100]
+# num_pts_for_intp: [4] # number of points for interpolation
+
+# methods: ['rk4', 'dopri5', 'euler']
+methods: ['rk4', 'dopri5']
+num_of_steps: [4, 6, 8]
 hidden_layers: [2, 3]
-hidden_layer_neurons: [100]
-num_pts_for_intp: [4, 6] # number of points for interpolation
+hidden_layer_neurons: [100, 30]
+num_pts_for_intp: [4, 6, 8] # number of points for interpolation
